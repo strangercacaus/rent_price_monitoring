@@ -31,13 +31,14 @@ class VivaRealApi():
 
     Métodos:
         endpoint: Uma propriedade que retorna o endpoint base da API.
-        _first_page: Uma propriedade que retorna a resposta HTML analisada em formato bs4.Soup da primeira página.
         _result_count: Uma propriedade que retorna o número total de resultados exibidos pelo portal.
         _results_per_page: Uma propriedade que retorna o número total de resultados encontrados na primeira página.
+        _first_page: Um método que retorna a resposta HTML analisada em formato bs4.Soup da primeira página.
         _get_endpoint: Um método interno que retorna um endpoint da API com base na cidade, página e em uma seed randômica.
         _get_new_page_number: Um método interno que retorna um número de página aleatório com base no tamanho do universo de resultados.
         _extract_current_page: Um método interno que extrai o html da página atual da API.
         _parse_html_response: Um método interno que converte o html em um objeto bs4.Soup.
+        _extract_attribute()L Uma função auxiliar da extract_listings responsável por executar a lógica e gerenciar erros.
         _extract_listings_from_soup: Um método interno que extrai os objetos da classe 'article' do objeto bs4.Soup obtido.
         _format_listing: Um método que formata uma listagem para inserção no result_set da instância.
         _append_formatted_listing: Um método interno que adiciona uma listagem formatada ao conjunto de resultados.
@@ -130,8 +131,8 @@ class VivaRealApi():
         soup = self._first_page
         try:
             return int(soup.find('strong',{'class':'results-summary__count'}).text.replace('.',''))
-        except:
-            print(f'No houses were found for the given page.\n the HTML structure of the page might have been altered...')
+        except Exception:
+            print(f'No houses were found for the given page.\n the HTML structure of the page might have been altered...\n{Exception}')
             return 0
         
     @property
@@ -192,7 +193,9 @@ class VivaRealApi():
         retries = 0
         while retries < max_retries:
             if self.current_page > 1:
-                time.sleep(self.delay_seconds) 
+                time.sleep(self.delay_seconds)
+            endpoint = self._get_endpoint()
+            print(endpoint)
             response = requests.get(self._get_endpoint())
             if response.status_code < 300:  # Successful response
                 return response
@@ -261,15 +264,15 @@ class VivaRealApi():
         term_list = formatted_string.split(',')[::-1]
         try:
             bairro = term_list[2]
-        except:
+        except TypeError:
             bairro = None
         try:
             numero = int(''.join(re.findall(r'\d', formatted_string)))
-        except:
+        except TypeError:
             numero = None
         try:
             rua = term_list[len(term_list)-1] if len(term_list) > 1 else None
-        except:
+        except TypeError:
             rua = None
         return dict(
             bairro = bairro,
@@ -277,6 +280,15 @@ class VivaRealApi():
             rua = rua
         )
     
+    def _extract_attribute(self, listing, tag, attr, default, post_process=None):
+        try:
+            result = listing.find(tag, attr)
+            if post_process:
+                result = post_process(result)
+            return result
+        except Exception as e:
+            return e
+
     def _format_listing(self, listing=None) -> list:
         """
         Formata as informações do anúncio.
@@ -293,58 +305,58 @@ class VivaRealApi():
         formatted = []
         try:
             descricao = listing.find('span', {'class': 'js-card-title'}).text.strip()
-        except:
+        except TypeError:
             descricao = None
         try:
             endereco = listing.find('span', {'class': 'property-card__address'}).text.replace('-',',').replace('|','').strip()
-        except:
+        except TypeError:
             endereco = ''
         try:
             rua = self.extract_address(endereco)['rua']
-        except:
+        except TypeError:
             rua = None
         try:
             numero = self.extract_address(endereco)['numero']
-        except:
+        except TypeError:
             numero = None   
         try:
             bairro = self.extract_address(endereco)['bairro']
-        except:
+        except TypeError:
             bairro = None
         try:
             valor = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[0]
-        except:
+        except TypeError:
             valor = None
         try:
             periodicidade = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[1].split(' ')[0]
-        except:
+        except TypeError:
             periodicidade = None
         try:
             condominio = listing.find('strong', {'class': 'js-condo-price'}).text.replace('R$','').strip()
-        except:
+        except TypeError:
             condominio = None
         try:
             area = listing.find('span', {'class': 'js-property-card-detail-area'}).text.strip()
-        except:
+        except TypeError:
             area = None
         try:
             qtd_banheiros = listing.find('li', {'class': 'property-card__detail-bathroom'}).text.strip()[0]
             qtd_banheiros = int(''.join(re.findall(r'\d', qtd_banheiros)))
-        except:
+        except TypeError:
             qtd_banheiros = None
         try:
             qtd_quartos = listing.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]
             qtd_quartos = int(''.join(re.findall(r'\d', qtd_quartos)))
-        except:
+        except TypeError:
             qtd_quartos = None
         try:
             qtd_vagas = listing.find('li', {'class': 'property-card__detail-garage'}).text.strip()[0]
             qtd_vagas = int(''.join(re.findall(r'\d', qtd_vagas)))
-        except:
+        except TypeError:
             qtd_vagas = None
         try:
             link = 'https://vivareal.com.br' + listing.find('a', {'class': 'property-card__labels-container'})['href']
-        except:
+        except TypeError:
             link = None
         return [data,fonte,descricao,endereco,rua,numero,bairro,cidade,valor,periodicidade,condominio,area,qtd_banheiros,qtd_quartos,qtd_vagas,link]
     
@@ -362,8 +374,8 @@ class VivaRealApi():
             if listing[-1] not in self.result_set['url'].to_list():
                 self.result_set.loc[self.result_set.shape[0]] = listing
                 return True
-        except:
-            print(f'Error appending the following listing:\n{listing}')
+        except Exception:
+            print(f'Error appending the following listing:\n{listing}, {Exception}')
             return False
         else:
             return False
@@ -396,10 +408,11 @@ class VivaRealApi():
                 success = self._append_formatted_listing(listing=formatted)
                 if success == True:
                     added_listings += 1
-        except exception:
-            print(f'Something went wrong while formating the listings of the page {self.current_page}: {exception}')
+        except Exception:
+            print(f'Something went wrong while formating the listings of the page {self.current_page}: {Exception}')
         else:
             print(f'{added_listings} novos anúncios adicionados na página {self.current_page}')
+            print(f'{formatted}')
             self.current_page = self._get_new_page_number()
     
     def ingest_listings(self, all=True, max_attempts=None) -> None:
@@ -548,11 +561,10 @@ class GithubApi():
         Retorna:
         Arquivo base64 na codificação desejada.
         """
-        if file_format == 'csv':
-            csv_data = appended_content.to_csv()
-            return base64.b64encode(csv_data.encode()).decode('utf-8')
-        else:
-            raise TypeError(f'Unsuported file type in _get_encoded_content function')
+        if file_format != 'csv':
+            raise TypeError('Unsuported file type in _get_encoded_content method')
+        csv_data = appended_content.to_csv()
+        return base64.b64encode(csv_data.encode()).decode('utf-8')
     
     def _put_content(self, headers, data, url) -> requests.models.Response:
         """
@@ -565,14 +577,14 @@ class GithubApi():
         Arquivo base64 na codificação desejada.
         """
         try:
-            response = requests.put(url=file_url, headers=headers, json=data)
+            response = requests.put(url=url, headers=headers, json=data)
             response.raise_for_status()
             return response
         except requests.HTTPError as http_err:
             print(f'HTTP error occurred: {http_err}')
         except Exception as err:
             print(f'Other error occurred: {err}')
-        else:
+        finally:
             if response.status_code == 200:
                 print("File updated successfully.")
             else:
@@ -599,7 +611,7 @@ class GithubApi():
         else:
             raise TypeError('"method" must be one of "append" or "overwrite".')
         encoded_content = self._get_encoded_content(appended_content)
-        commit_message = f"Automatically updated via Kaggle script"
+        commit_message = "Automatically updated via Kaggle script"
         headers = {'Authorization': f'token {self.token}'}
         data = {"message": commit_message,"content": encoded_content,"sha": current_sha}
         self._put_content(headers=headers, data=data, url=file_url)
