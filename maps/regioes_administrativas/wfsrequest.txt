@@ -1,0 +1,1 @@
+https://geofloripa.pmf.sc.gov.br/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=Geoportal:regioes_administrativas&outputFormat=SHAPE-ZIP
