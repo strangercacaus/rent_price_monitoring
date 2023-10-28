@@ -1,4 +1,7 @@
 # Florianópolis Rent Price Monitoring
+![Status](https://img.shields.io/badge/Status-Development-0090ff?style=for-the-badge&logoColor=white)
+[![CodeFactor](https://www.codefactor.io/repository/github/strangercacaus/florianopolis_rent_pricing_monitoring/badge/main?style=for-the-badge)](https://www.codefactor.io/repository/github/strangercacaus/florianopolis_rent_pricing_monitoring/overview/main)
+
 
 ### Objetivo:
 
@@ -17,27 +20,91 @@ O projeto se baseia na realização de uma rotina semanal de web-scraping utiliz
 [![Notebook](https://img.shields.io/badge/Acesse_o_Notebook-035a7d?style=for-the-badge&logo=kaggle&logoColor=white)](https://www.kaggle.com/code/caueausec/florian-polis-rent-pricing-dataset-web-scraping)
 
 Os dados são coletados a partir do site Viva Real, estruturados no formato de um Dataframe Pandas e então
-adicionados ao arquivo Dataset.csv aqui no github. a estrutura da tabela gerada é a seguinte:
+adicionados ao arquivo Dataset.csv aqui no github.
 
-``` python
-{
- 'data':'datetime64[ns]',
- 'fonte':'str',
- 'descricao':'str',
- 'endereco':'str',
- 'rua':'str',
- 'numero':'int',
- 'bairro':'str',
- 'cidade':'str',
- 'valor':'float',
- 'periodicidade':'str',
- 'condominio':'float',
- 'area':'float',
- 'qtd_banheiros':'int',
- 'qtd_quartos':'int',
- 'qtd_vagas':'int',
- 'url':'str'
-}
+### Estrutura de classes
+
+``` mermaid
+classDiagram
+    GithubApi <-- ResultSet 
+    ListingApi <-- ResultSet 
+    ListingApi --|> VivaRealApi 
+
+    class ResultSet{
+        pd.DataFrame(
+        data : datetime64[ns],
+        fonte : str,
+        descricao : str,
+        endereco : str,
+        rua : str,
+        numero : int,
+        bairro : str,
+        cidade : str,
+        valor : float,
+        periodicidade : str,
+        condominio : float,
+        area : float,
+        qtd_banheiros : int,
+        qtd_quartos : int,
+        qtd_vagas : int,
+        url : str
+        )
+        to_csv()
+        to_parquet()
+    }
+    class ListingApi{
+        @abstractclasses : 
+        @city  :  str
+        delayseconds  :  int
+        _last_http_response  :  int
+        result_set  :  ResultSet
+        @_result_count  :  +int
+        @_results_per_page  :  int
+        _first_page()  :  html
+        @_get_endpoint()  :  str
+        _get_new_page_number()  :  int
+        _extract_current_page()  :  html
+        _parse_html_response()  :   bs4.Beautifulsoup
+        _extract_attribute()  :  str
+        @_extract_listings_from_soup()  :  bs4.ResultSet
+        @_format_listing()  :  tuple
+        @_append_formatted_listing()  :  bool
+        _ingest_current_page()  :  None
+        ingest_listings()  :  None
+    }
+    class VivaRealApi{
+        city  :  str
+        delayseconds  :  int
+        _last_http_response  :  int
+        result_set  :  ResultSet
+        _result_count  :  +int
+        _results_per_page  :  int
+        _first_page()  :  html
+        _get_endpoint()  :  str
+        _get_new_page_number()  :  int
+        _extract_current_page()  :  html
+        _parse_html_response()  :   bs4.Beautifulsoup
+        _extract_attribute()  :  str
+        _extract_listings_from_soup()  :  bs4.ResultSet
+        _format_listing()  :  tuple
+        _append_formatted_listing()  :  bool
+        _ingest_current_page()  :  None
+        ingest_listings()  :  None
+    }
+    class GithubApi{
+        str token : str
+        str owner : str
+        str repo : str
+        str base_url : str
+        str get_url() : str
+        str get_file_info() : str
+        download_current_content() : pd.DataFrame
+        _append_new_content() : pd.DataFrame
+        _get_encoded_content() : bytes
+        _put_content() : None
+        _update_file_content() : None
+    }
+
 ```
 Uma vez gravados, os dados são disponibilizados no Kaggle em um Dataset Público:
 

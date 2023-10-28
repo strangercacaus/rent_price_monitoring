@@ -1,0 +1,10 @@
+digraph "classes" {
+rankdir=BT
+charset="utf-8"
+"apis.GithubApi" [color="black", fontcolor="black", label=<{GithubApi|base_url<br ALIGN="LEFT"/>owner : str<br ALIGN="LEFT"/>repo : str<br ALIGN="LEFT"/>token : str<br ALIGN="LEFT"/>|get_file_info(file_url): str<br ALIGN="LEFT"/>get_url(file_path: str): str<br ALIGN="LEFT"/>update_file_content(file_path, new_content, method): None<br ALIGN="LEFT"/>}>, shape="record", style="solid"];
+"apis.ListingAPI" [color="black", fontcolor="black", label=<{ListingAPI|city : str<br ALIGN="LEFT"/>current_page : int<br ALIGN="LEFT"/>delay_seconds : int<br ALIGN="LEFT"/>endpoint<br ALIGN="LEFT"/>result_set<br ALIGN="LEFT"/>type<br ALIGN="LEFT"/>|<I>extract_address</I>(string): dict<br ALIGN="LEFT"/>ingest_listings(all, max_attempts): None<br ALIGN="LEFT"/>}>, shape="record", style="solid"];
+"apis.ResultSet" [color="black", fontcolor="black", label=<{ResultSet|<br ALIGN="LEFT"/>|}>, shape="record", style="solid"];
+"apis.VivaRealApi" [color="black", fontcolor="black", label=<{VivaRealApi|endpoint<br ALIGN="LEFT"/>type<br ALIGN="LEFT"/>|extract_address(string): dict<br ALIGN="LEFT"/>}>, shape="record", style="solid"];
+"apis.VivaRealApi" -> "apis.ListingAPI" [arrowhead="empty", arrowtail="none"];
+"apis.ResultSet" -> "apis.ListingAPI" [arrowhead="diamond", arrowtail="none", fontcolor="green", label="result_set", style="solid"];
+}

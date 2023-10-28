@@ -1,21 +1,41 @@
 # Builtins
 from datetime import datetime, date
 import requests
-import string
 import time
 import re
 import base64
 from random import randint
+from abc import ABC, abstractmethod, abstractproperty
 
 # Bibliotecas Externas
-import numpy as np
 import pandas as pd
 import bs4
 # import html5lib
 
-class VivaRealApi():
+class ResultSet(pd.DataFrame):
+    def __init__(self):
+        super().__init__(
+            data={'data': pd.Series(dtype='datetime64[ns]'),
+                'fonte': pd.Series(dtype='str'),
+                'descricao': pd.Series(dtype='str'),
+                'endereco': pd.Series(dtype='str'),
+                'rua': pd.Series(dtype='str'),
+                'numero': pd.Series(dtype='int'),
+                'bairro': pd.Series(dtype='str'),
+                'cidade': pd.Series(dtype='str'),
+                'valor': pd.Series(dtype='float'),
+                'periodicidade': pd.Series(dtype='str'),
+                'condominio': pd.Series(dtype='float'),
+                'area': pd.Series(dtype='float'),
+                'qtd_banheiros': pd.Series(dtype='int'),
+                'qtd_quartos': pd.Series(dtype='int'),
+                'qtd_vagas': pd.Series(dtype='int'),
+                'url': pd.Series(dtype='str')
+                    })
+
+class ListingAPI(ABC):
     """
-    Uma classe que representa a API do portal VivaReal.
+    Uma classe abstrata que representa um portal de anúncios a ser implementado.
 
     Args:
         cidade: Uma string representando a cidade que será monitorada, sem caracteres especiais ou acentuação.
@@ -71,43 +91,24 @@ class VivaRealApi():
             cidade: Uma string representando a cidade a ser monitorada.
             delay_seconds: Opcional, um número inteiro representando o atraso em segundos entre as requisições sequenciais.
         """
-        self.type = 'Viva Real'
         self.current_page = 1
         self.city = cidade
         self.delay_seconds = delay_seconds
         self._last_http_response = None
-        self.result_set = pd.DataFrame( # possivelmente faça mais sentido criar uma classe separada pra esse dataframe.
-            {'data': pd.Series(dtype='datetime64[ns]'),
-             'fonte': pd.Series(dtype='str'),
-             'descricao': pd.Series(dtype='str'),
-             'endereco': pd.Series(dtype='str'),
-             'rua': pd.Series(dtype='str'),
-             'numero': pd.Series(dtype='int'),
-             'bairro': pd.Series(dtype='str'),
-             'cidade': pd.Series(dtype='str'),
-             'valor': pd.Series(dtype='float'),
-             'periodicidade': pd.Series(dtype='str'),
-             'condominio': pd.Series(dtype='float'),
-             'area': pd.Series(dtype='float'),
-             'qtd_banheiros': pd.Series(dtype='int'),
-             'qtd_quartos': pd.Series(dtype='int'),
-             'qtd_vagas': pd.Series(dtype='int'),
-             'url': pd.Series(dtype='str')
-                  })
+        self.result_set = ResultSet()
+
+    @property
+    @abstractmethod
+    def type(self) -> str:
+        pass
         
     @property
+    @abstractmethod
     def endpoint(self) -> str:
-        """
-        Obtém o endpoint da API.
+        pass
 
-        Retorna:
-            Uma string representando o endpoint base da API.
-        """
-        return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/?pagina='
-    
     @property
     def _first_page(self) -> bs4.BeautifulSoup:
-
         """
         Obtém a resposta HTML da primeira página e a processa no format bs4.BeautifulSoup.
 
@@ -118,22 +119,9 @@ class VivaRealApi():
         response = self._extract_current_page()
         return self._parse_html_response(response=response)
     
-    @property
+    @abstractproperty
     def _result_count(self) -> int:
-        """
-        Obtém o número total de resultados divulgados pelo portal para a cidade atribuída.
-        
-        O valor é obtido a partir da identificação de um elemento 'Strong' da classe 'results-summary__count'
-
-        Retorna:
-            Um número inteiro representando a quantidade total de resultados fornecida pelo portal.
-        """
-        soup = self._first_page
-        try:
-            return int(soup.find('strong',{'class':'results-summary__count'}).text.replace('.',''))
-        except Exception:
-            print(f'No houses were found for the given page.\n the HTML structure of the page might have been altered...\n{Exception}')
-            return 0
+        pass
         
     @property
     def _results_per_page(self) -> int:
@@ -147,28 +135,9 @@ class VivaRealApi():
         listings = self._extract_listings_from_soup(soup=soup)
         return len(listings)
     
+    @abstractmethod
     def _get_endpoint(self) -> str:
-        """
-        Obtém o endpoint da API com base no endpoint base, página atual e uma seed aleatória.
-
-        Retorna:
-            Uma string representando o endpoint da API pronto para extração.
-        """
-        seed = randint(1,6)
-        
-        match seed:
-            case 1:
-                return f'{self.endpoint}{self.current_page}#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
-            case 2:
-                return f'{self.endpoint}{self.current_page}'
-            case 3:
-                return f'{self.endpoint}{self.current_page}#onde=Florian%C3%B3polis,,,'
-            case 4:
-                return f'{self.endpoint}{self.current_page}#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
-            case 5:
-                return f'{self.endpoint}{self.current_page}#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
-            case 6:
-                return f'{self.endpoint}{self.current_page}#onde=,Santa%20Catarina,Florian%C3%B3polis,,,,,,,city,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
+        pass
     
     def _get_new_page_number(self) -> int:
         """
@@ -198,6 +167,7 @@ class VivaRealApi():
             print(endpoint)
             response = requests.get(self._get_endpoint())
             if response.status_code < 300:  # Successful response
+                self._last_http_response = response.status_code
                 return response
             elif response.status_code == 429:  # Too many requests
                 print(f"Rate limited. Retrying in {backoff_factor ** retries} seconds.")
@@ -205,8 +175,8 @@ class VivaRealApi():
                 retries += 1
             else:
                 print(f"Request failed with status code {response.status_code}")
+                self._last_http_response = response.status_code
                 return None
-            self._last_http_response = response.status_code
     
     def _parse_html_response(self, response=None) -> bs4.BeautifulSoup:
         """
@@ -225,60 +195,14 @@ class VivaRealApi():
             return None
         else:
             print('Empty request')
-        
+
+    @abstractmethod 
     def _extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
-        """
-        Extrai as listagens de anúncios do objeto bs4.BeautifulSoup.
+        pass
 
-        Utiliza o método soup.find_all para encontrar objetos html do tipo 'article' e classe 'property-card__container',
-        retornando um objeto ResultSet com as correspondências
-
-        Args:
-            soup: Um objeto BeautifulSoup representando a resposta HTML analisada.
-
-        Retorna:
-            Um objeto ResultSet contendo as listagens extraídas.
-        """
-        return soup.find_all('article', {'class': 'property-card__container js-property-card'})
-
+    @abstractmethod
     def extract_address(self, string) -> dict:
-        """
-        Extrai os componentes do endereço de uma string.
-
-        Args:
-            string: Uma string representando o endereço.
-
-        Retorna:
-            Um dicionário contendo os componentes do endereço extraídos (bairro, numero, rua).
-        """
-        formatted_chars = []
-        bairro = None
-        numero = None
-        rua = None
-        for char in string:
-            if char in "-,/;|.":
-                formatted_chars.append(',')
-            else:
-                formatted_chars.append(char)
-        formatted_string = ''.join(formatted_chars)
-        term_list = formatted_string.split(',')[::-1]
-        try:
-            bairro = term_list[2]
-        except TypeError:
-            bairro = None
-        try:
-            numero = int(''.join(re.findall(r'\d', formatted_string)))
-        except TypeError:
-            numero = None
-        try:
-            rua = term_list[len(term_list)-1] if len(term_list) > 1 else None
-        except TypeError:
-            rua = None
-        return dict(
-            bairro = bairro,
-            numero = numero,
-            rua = rua
-        )
+        pass
     
     def _extract_attribute(self, listing, tag, attr, default, post_process=None):
         try:
@@ -289,76 +213,9 @@ class VivaRealApi():
         except Exception as e:
             return e
 
+    @abstractmethod
     def _format_listing(self, listing=None) -> list:
-        """
-        Formata as informações do anúncio.
-
-        Args:
-            listing: Um objeto BeautifulSoup representando as informações do anúncio.
-
-        Retorna:
-            Uma lista contendo as informações do anúncio formatadas.
-        """
-        data = datetime.now()
-        fonte = self.type
-        cidade = self.city
-        formatted = []
-        try:
-            descricao = listing.find('span', {'class': 'js-card-title'}).text.strip()
-        except TypeError:
-            descricao = None
-        try:
-            endereco = listing.find('span', {'class': 'property-card__address'}).text.replace('-',',').replace('|','').strip()
-        except TypeError:
-            endereco = ''
-        try:
-            rua = self.extract_address(endereco)['rua']
-        except TypeError:
-            rua = None
-        try:
-            numero = self.extract_address(endereco)['numero']
-        except TypeError:
-            numero = None   
-        try:
-            bairro = self.extract_address(endereco)['bairro']
-        except TypeError:
-            bairro = None
-        try:
-            valor = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[0]
-        except TypeError:
-            valor = None
-        try:
-            periodicidade = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[1].split(' ')[0]
-        except TypeError:
-            periodicidade = None
-        try:
-            condominio = listing.find('strong', {'class': 'js-condo-price'}).text.replace('R$','').strip()
-        except TypeError:
-            condominio = None
-        try:
-            area = listing.find('span', {'class': 'js-property-card-detail-area'}).text.strip()
-        except TypeError:
-            area = None
-        try:
-            qtd_banheiros = listing.find('li', {'class': 'property-card__detail-bathroom'}).text.strip()[0]
-            qtd_banheiros = int(''.join(re.findall(r'\d', qtd_banheiros)))
-        except TypeError:
-            qtd_banheiros = None
-        try:
-            qtd_quartos = listing.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]
-            qtd_quartos = int(''.join(re.findall(r'\d', qtd_quartos)))
-        except TypeError:
-            qtd_quartos = None
-        try:
-            qtd_vagas = listing.find('li', {'class': 'property-card__detail-garage'}).text.strip()[0]
-            qtd_vagas = int(''.join(re.findall(r'\d', qtd_vagas)))
-        except TypeError:
-            qtd_vagas = None
-        try:
-            link = 'https://vivareal.com.br' + listing.find('a', {'class': 'property-card__labels-container'})['href']
-        except TypeError:
-            link = None
-        return [data,fonte,descricao,endereco,rua,numero,bairro,cidade,valor,periodicidade,condominio,area,qtd_banheiros,qtd_quartos,qtd_vagas,link]
+        pass
     
     def _append_formatted_listing(self, listing=None) -> None:
         """
@@ -439,25 +296,169 @@ class VivaRealApi():
                     attempts += 1
             else:
                 raise TypeError('pages_number: This parameter only accepts numbers above zero.')
-                
-    def dump_result_set(self, path=None, format='csv') -> None:
-        """
-        Salva o result_set em um arquivo.
 
-        Args:
-            path: Uma string representando o caminho do arquivo a ser salvo.
-            format: Uma string representando o formato do arquivo ('csv' ou 'parquet').
+class VivaRealApi(ListingAPI):
+    def __init__(self,cidade:str,delay_seconds:int=0):
+        super().__init__(cidade=cidade,delay_seconds=delay_seconds)
+
+    @property
+    def type(self) -> str:
+        return 'Viva Real'
+
+    @property
+    def endpoint(self) -> str:
+        """
+        Obtém o endpoint da API.
 
         Retorna:
-            None.
+            Uma string representando o endpoint base da API.
         """
-        if format=='csv':
-            self.result_set.to_csv(f'{path}{self.city}_{date.today()}.csv')
-        elif format=='parquet':
-            self.result_set.to_parquet(f'{path}{self.city}_{date.today()}.parquet')
-        else:
-            print(f'Option not allowed: {format}')
+        return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/?pagina='
+    
+    @property
+    def _result_count(self) -> int:
+        """
+        Obtém o número total de resultados divulgados pelo portal para a cidade atribuída.
+        
+        O valor é obtido a partir da identificação de um elemento 'Strong' da classe 'results-summary__count'
 
+        Retorna:
+            Um número inteiro representando a quantidade total de resultados fornecida pelo portal.
+        """
+        soup = self._first_page
+        try:
+            return int(soup.find('strong',{'class':'results-summary__count'}).text.replace('.',''))
+        except Exception:
+            print(f'No houses were found for the given page.\n the HTML structure of the page might have been altered...\n{Exception}')
+            return 0
+    
+    def _extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
+        """
+        Extrai as listagens de anúncios do objeto bs4.BeautifulSoup.
+
+        Utiliza o método soup.find_all para encontrar objetos html do tipo 'article' e classe 'property-card__container',
+        retornando um objeto ResultSet com as correspondências
+
+        Args:
+            soup: Um objeto BeautifulSoup representando a resposta HTML analisada.
+
+        Retorna:
+            Um objeto ResultSet contendo as listagens extraídas.
+        """
+        return soup.find_all('article', {'class': 'property-card__container js-property-card'})
+                
+    
+    def extract_address(self, string) -> dict:
+        """
+        Extrai os componentes do endereço de uma string.
+
+        Args:
+            string: Uma string representando o endereço.
+
+        Retorna:
+            Um dicionário contendo os componentes do endereço extraídos (bairro, numero, rua).
+        """
+        string = ''.join([char if char not in "-,/;|." else ',' for char in string])
+        term_list = string.split(',')[::-1]
+        bairro = term_list[2] if len(term_list) > 2 else None
+        numero = int(''.join(re.findall(r'\d', string))) if re.findall(r'\d', string) else None
+        rua = term_list[0] if term_list else None
+        return dict(
+            bairro = bairro,
+            numero = numero,
+            rua = rua
+        )
+
+    
+    def _get_endpoint(self) -> str:
+        """
+        Obtém o endpoint da API com base no endpoint base, página atual e uma seed aleatória.
+
+        Retorna:
+            Uma string representando o endpoint da API pronto para extração.
+        """
+        seed = randint(1,6)
+        append_strings = {
+            1: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
+            2: '',
+            3: '#onde=Florian%C3%B3polis,,,',
+            4: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
+            5: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
+            6: '#onde=,Santa%20Catarina,Florian%C3%B3polis,,,,,,,city,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
+            }
+        return f'{self.endpoint}{self.current_page}{append_strings[seed]}'
+
+    
+    def _format_listing(self, listing=None) -> list:
+        """
+        Formata as informações do anúncio.
+
+        Args:
+            listing: Um objeto BeautifulSoup representando as informações do anúncio.
+
+        Retorna:
+            Uma lista contendo as informações do anúncio formatadas.
+        """
+        data = datetime.now()
+        fonte = self.type
+        cidade = self.city
+        formatted = []
+        try:
+            descricao = listing.find('span', {'class': 'js-card-title'}).text.strip()
+        except TypeError:
+            descricao = None
+        try:
+            endereco = listing.find('span', {'class': 'property-card__address'}).text.replace('-',',').replace('|','').strip()
+        except TypeError:
+            endereco = ''
+        try:
+            rua = self.extract_address(endereco)['rua']
+        except TypeError:
+            rua = None
+        try:
+            numero = self.extract_address(endereco)['numero']
+        except TypeError:
+            numero = None   
+        try:
+            bairro = self.extract_address(endereco)['bairro']
+        except TypeError:
+            bairro = None
+        try:
+            valor = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[0]
+        except TypeError:
+            valor = None
+        try:
+            periodicidade = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[1].split(' ')[0]
+        except TypeError:
+            periodicidade = None
+        try:
+            condominio = listing.find('strong', {'class': 'js-condo-price'}).text.replace('R$','').strip()
+        except TypeError:
+            condominio = None
+        try:
+            area = listing.find('span', {'class': 'js-property-card-detail-area'}).text.strip()
+        except TypeError:
+            area = None
+        try:
+            qtd_banheiros = listing.find('li', {'class': 'property-card__detail-bathroom'}).text.strip()[0]
+            qtd_banheiros = int(''.join(re.findall(r'\d', qtd_banheiros)))
+        except TypeError:
+            qtd_banheiros = None
+        try:
+            qtd_quartos = listing.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]
+            qtd_quartos = int(''.join(re.findall(r'\d', qtd_quartos)))
+        except TypeError:
+            qtd_quartos = None
+        try:
+            qtd_vagas = listing.find('li', {'class': 'property-card__detail-garage'}).text.strip()[0]
+            qtd_vagas = int(''.join(re.findall(r'\d', qtd_vagas)))
+        except TypeError:
+            qtd_vagas = None
+        try:
+            link = 'https://vivareal.com.br' + listing.find('a', {'class': 'property-card__labels-container'})['href']
+        except TypeError:
+            link = None
+        return (data,fonte,descricao,endereco,rua,numero,bairro,cidade,valor,periodicidade,condominio,area,qtd_banheiros,qtd_quartos,qtd_vagas,link)
 # Classe GithubAPI: Gerencia a integração do notebook com o Github
 
 class GithubApi():
