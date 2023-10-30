@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod, abstractproperty
 
 # Bibliotecas Externas
 import pandas as pd
-import bs4
+import bs4 #BeautifulSoup - Lida com estruturas de dados html
 # import html5lib
 
 class ResultSet(pd.DataFrame):
@@ -115,7 +115,6 @@ class ListingAPI(ABC):
         Retorna:
             Um objeto BeautifulSoup representando a resposta HTML analisada.
         """
-
         response = self._extract_current_page()
         return self._parse_html_response(response=response)
     
@@ -205,6 +204,22 @@ class ListingAPI(ABC):
         pass
     
     def _extract_attribute(self, listing, tag, attr, default, post_process=None):
+        """
+        Extrai um atributo de um anúncio usando a tag e o atributo especificados.
+
+        Args:
+            listing: O anúncio do qual extrair o atributo.
+            tag: A tag a ser procurada.
+            attr: O atributo a ser recuperado.
+            default: O valor padrão a ser retornado se o atributo não for encontrado.
+            post_process: (opcional) Uma função para pós-processar o atributo extraído.
+
+        Returns:
+            O valor do atributo extraído, ou o valor padrão se o atributo não for encontrado.
+
+        Raises:
+            Exception: Se ocorrer um erro durante a extração do atributo.
+        """
         try:
             result = listing.find(tag, attr)
             if post_process:
@@ -218,6 +233,7 @@ class ListingAPI(ABC):
         pass
     
     def _append_formatted_listing(self, listing=None) -> None:
+        url = listing[-1]
         """
         Adiciona o anúncio formatado ao conjunto de resultados.
 
@@ -228,9 +244,11 @@ class ListingAPI(ABC):
             None
         """
         try:
-            if listing[-1] not in self.result_set['url'].to_list():
+            if url not in self.result_set['url'].to_list():
                 self.result_set.loc[self.result_set.shape[0]] = listing
                 return True
+            else:
+                print(f'{url} Already exists in the result_set')
         except Exception:
             print(f'Error appending the following listing:\n{listing}, {Exception}')
             return False
@@ -433,7 +451,7 @@ class VivaRealApi(ListingAPI):
             periodicidade = None
         try:
             condominio = listing.find('strong', {'class': 'js-condo-price'}).text.replace('R$','').strip()
-        except TypeError:
+        except AttributeError:
             condominio = None
         try:
             area = listing.find('span', {'class': 'js-property-card-detail-area'}).text.strip()
@@ -442,17 +460,17 @@ class VivaRealApi(ListingAPI):
         try:
             qtd_banheiros = listing.find('li', {'class': 'property-card__detail-bathroom'}).text.strip()[0]
             qtd_banheiros = int(''.join(re.findall(r'\d', qtd_banheiros)))
-        except TypeError:
+        except ValueError:
             qtd_banheiros = None
         try:
             qtd_quartos = listing.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]
             qtd_quartos = int(''.join(re.findall(r'\d', qtd_quartos)))
-        except TypeError:
+        except ValueError:
             qtd_quartos = None
         try:
             qtd_vagas = listing.find('li', {'class': 'property-card__detail-garage'}).text.strip()[0]
             qtd_vagas = int(''.join(re.findall(r'\d', qtd_vagas)))
-        except TypeError:
+        except ValueError:
             qtd_vagas = None
         try:
             link = 'https://vivareal.com.br' + listing.find('a', {'class': 'property-card__labels-container'})['href']
