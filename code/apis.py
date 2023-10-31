@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod, abstractproperty
 # Bibliotecas Externas
 import pandas as pd
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
+from fake_useragent import UserAgent
 # import html5lib
 
 class ResultSet(pd.DataFrame):
@@ -138,14 +139,24 @@ class ListingAPI(ABC):
     def _get_endpoint(self) -> str:
         pass
     
-    def _get_new_page_number(self) -> int:
+    def _get_new_page_number(self, method='seq') -> int:
         """
         Obtém um novo número de página dentro do total de resultados.
+
+        Args:
+            method - 'seq' ou 'rand', seq varre as páginas uma a uma, enquanto 'rand' seleciona páginas
+            aleatórias entre as possíveis para a quantidade de resultados.
 
         Retorna:
             Um inteiro representando o novo número de página.
         """
-        return randint(1,round(self._result_count/self._results_per_page))
+        if method == 'seq':
+            return self.current_page + 1
+        elif method == 'rand':
+            return randint(1,round(self._result_count/self._results_per_page))
+        else:
+            raise ValueError('Erro: O parâmetro "method" aceita os valores "seq" | "rand"')
+
     
     def _extract_current_page(self, max_retries=5, backoff_factor=2) -> requests.models.Response:
         """
@@ -160,22 +171,27 @@ class ListingAPI(ABC):
         """
         retries = 0
         while retries < max_retries:
-            if self.current_page > 1:
+            if retries > 0 or self.current_page > 1:
                 time.sleep(self.delay_seconds)
-            endpoint = self._get_endpoint()
-            print(endpoint)
-            response = requests.get(self._get_endpoint())
-            if response.status_code < 300:  # Successful response
-                self._last_http_response = response.status_code
+            response = requests.get(
+                self._get_endpoint(),
+                headers={'User-Agent': UserAgent().random}
+                )
+            
+            self._last_http_response = response.status_code
+            
+            if response.status_code < 300:  # Sucesso
                 return response
+            
             elif response.status_code == 429:  # Too many requests
                 print(f"Rate limited. Retrying in {backoff_factor ** retries} seconds.")
                 time.sleep(backoff_factor ** retries)
                 retries += 1
+                
             else:
                 print(f"Request failed with status code {response.status_code}")
-                self._last_http_response = response.status_code
                 return None
+
     
     def _parse_html_response(self, response=None) -> bs4.BeautifulSoup:
         """
@@ -390,21 +406,12 @@ class VivaRealApi(ListingAPI):
     
     def _get_endpoint(self) -> str:
         """
-        Obtém o endpoint da API com base no endpoint base, página atual e uma seed aleatória.
+        Obtém o endpoint da API com base no endpoint base e a página atual.
 
         Retorna:
             Uma string representando o endpoint da API pronto para extração.
         """
-        seed = randint(1,6)
-        append_strings = {
-            1: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
-            2: '',
-            3: '#onde=Florian%C3%B3polis,,,',
-            4: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
-            5: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
-            6: '#onde=,Santa%20Catarina,Florian%C3%B3polis,,,,,,,city,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
-            }
-        return f'{self.endpoint}{self.current_page}{append_strings[seed]}'
+        return f'{self.endpoint}{self.current_page}'
 
     
     def _format_listing(self, listing=None) -> list:
