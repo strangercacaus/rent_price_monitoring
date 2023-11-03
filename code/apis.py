@@ -17,7 +17,7 @@ class ProxyConfig():
     """
     Representa um objeto de configuração de Servidor de Proxy.
 
-    Attributes:
+    Atributos:
         host (str): a string host do serviço de proxy.
         port (int): a porta de acesso ao serviço.
         username (str): o nome de usuário para autenticação.
@@ -30,8 +30,30 @@ class ProxyConfig():
     Properties:
         proxy_list (dict): Um dicionário com as strings completas de configuração de proxy para HTTP e HTTPS.
 
+    Exemplo:
+        ```Python
+        # Chamada:
+        proxy = ProxyConfig(
+                        host=proxy_host,
+                        port=proxy_port,
+                        username=proxy_username,
+                        password=proxy_password)
+        # Retorno:
+        <apis.ProxyConfig at 0x1407f9610>
+        ```
     """
     def __init__(self, host:str, port:int, username:str, password:str):
+        """
+        Instancia um proxy para ser utilizado nos crawlers
+
+        Artgs:
+            - host (str): a string host do serviço de proxy.
+            - port (int): a porta de acesso ao serviço.
+            - username (str): o nome de usuário para autenticação.
+            - password (str): a senha para autenticação.
+        Retorna:
+
+        """
         self.host = host
         self.port = port
         self.username = username
@@ -39,12 +61,18 @@ class ProxyConfig():
     
     @property
     def proxy_list(self) -> dict:
+        """
+        Retorna um dicionário com strings para proxy HTTP e HTTPS
+        """
         return {
             'http': f'http://{self.username}:{self.password}@{self.host}:{self.port}',
             'https': f'http://{self.username}:{self.password}@{self.host}:{self.port}'
                 }
 
     def get_proxy_auth(self) -> requests.auth.HTTPProxyAuth:
+        """
+        Retorna um objeto do tipo requests.auth.HTTPProxyAuth utilizando o usernamee e senha do proxy.
+        """
         return requests.auth.HTTPProxyAuth(self.username, self.password)
     
 
