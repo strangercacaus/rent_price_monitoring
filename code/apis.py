@@ -13,6 +13,42 @@ import bs4 #BeautifulSoup - Lida com estruturas de dados html
 from fake_useragent import UserAgent
 # import html5lib
 
+class ProxyConfig():
+    """
+    Representa um objeto de configuração de Servidor de Proxy.
+
+    Attributes:
+        host (str): a string host do serviço de proxy.
+        port (int): a porta de acesso ao serviço.
+        username (str): o nome de usuário para autenticação.
+        password (str): a senha para autenticação.
+
+    Methods:
+        get_proxy_auth() -> requests.auth.HTTPProxyAuth:
+            Retorna um objeto de autenticação de proxy da biblioteca Requestst.
+
+    Properties:
+        proxy_list (dict): Um dicionário com as strings completas de configuração de proxy para HTTP e HTTPS.
+
+    """
+    def __init__(self, host:str, port:int, username:str, password:str):
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+    
+    @property
+    def proxy_list(self) -> dict:
+        return {
+            'http': f'http://{self.username}:{self.password}@{self.host}:{self.port}',
+            'https': f'http://{self.username}:{self.password}@{self.host}:{self.port}'
+                }
+
+    def get_proxy_auth(self) -> requests.auth.HTTPProxyAuth:
+        return requests.auth.HTTPProxyAuth(self.username, self.password)
+    
+
+
 class ResultSet(pd.DataFrame):
     def __init__(self):
         super().__init__(
@@ -81,7 +117,7 @@ class ListingAPI(ABC):
         api.dump_result_set(path='/caminho/para/salvar/', format='csv')
     """
 
-    def __init__(self, cidade:str, delay_seconds=0) -> None:
+    def __init__(self, cidade:str, delay_seconds=0,proxy:ProxyConfig=None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -97,6 +133,7 @@ class ListingAPI(ABC):
         self.delay_seconds = delay_seconds
         self._last_http_response = None
         self.result_set = ResultSet()
+        self.proxy = proxy
 
     @property
     @abstractmethod
@@ -174,7 +211,8 @@ class ListingAPI(ABC):
             if retries > 0 or self.current_page > 1:
                 time.sleep(self.delay_seconds)
             response = requests.get(
-                self._get_endpoint(),
+                url= self._get_endpoint(),
+                proxies= self.proxy.proxy_list,
                 headers={'User-Agent': UserAgent().random}
                 )
             
@@ -332,8 +370,8 @@ class ListingAPI(ABC):
                 raise TypeError('pages_number: This parameter only accepts numbers above zero.')
 
 class VivaRealApi(ListingAPI):
-    def __init__(self,cidade:str,delay_seconds:int=0):
-        super().__init__(cidade=cidade,delay_seconds=delay_seconds)
+    def __init__(self,cidade:str,delay_seconds:int=0, proxy:ProxyConfig=None):
+        super().__init__(cidade=cidade,delay_seconds=delay_seconds,proxy=proxy)
 
     @property
     def type(self) -> str:
