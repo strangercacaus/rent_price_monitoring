@@ -32,9 +32,9 @@ adicionados ao arquivo Dataset.csv aqui no github.
 
 ``` mermaid
 classDiagram
-    GithubApi <-- ResultSet 
     ListingApi <-- ResultSet 
     ListingApi --|> VivaRealApi 
+    ListingApi <-- ProxyConfig
 
     class ResultSet{
         pd.DataFrame(
@@ -59,10 +59,11 @@ classDiagram
         to_parquet()
     }
     class ListingApi{
-        @abstractclasses : 
+        Legend @: abstractclasses
         @city  :  str
         delayseconds  :  int
         _last_http_response  :  int
+        proxy : ProxyConfig
         result_set  :  ResultSet
         @_result_count  :  +int
         @_results_per_page  :  int
@@ -109,6 +110,15 @@ classDiagram
         _get_encoded_content() : bytes
         _put_content() : None
         _update_file_content() : None
+    }
+
+    class ProxyConfig{
+        str host : str
+        int port : int
+        str username : str
+        str password : str
+        str proxy_list() : str
+        get_proxy_auth() : requests.ProxyAuth
     }
 
 ```
