@@ -167,8 +167,9 @@ class ListingAPI(ABC):
             periodicidade = self.extract_value(value_id='periodicity', listing=listing),
             condominio = self.extract_value(value_id='condoprice', listing=listing),
             area = self.extract_value(value_id='area', listing=listing),
+            qtd_banheiros = self.extract_value(value_id='bathrooms', listing=listing),
             qtd_quartos = self.extract_value(value_id='rooms', listing=listing),
-            qtd_vagas = self.extract_value(value_id='parkinspaces', listing=listing),
+            qtd_vagas = self.extract_value(value_id='parkingspaces', listing=listing),
             url = self.extract_value(value_id='url', listing=listing),
             amenities = self.extract_value(value_id='amenities', listing=listing)
         )
@@ -392,20 +393,20 @@ class VivaRealApi(ListingAPI):
 
     def load_extractor(self, value_id: str) -> callable:
         cases = {
-            'id': lambda x: x.find('a', {'class': 'property-card__content-link js-card-title'})['href'].split('-')[-1],
+            'id': lambda x: int(''.join(re.findall(r'\d', x.find('a', {'class': 'property-card__content-link js-card-title'})['href'].split('-')[-1]))),
             'url': lambda x: 'https://vivareal.com.br' + x.find('a', {'class': 'property-card__content-link js-card-title'})['href'],
             'address': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip(),
-            'street': lambda x: next((char for char in x.find('span', {'class': 'property-card__address'}).text.strip().replace('-', ',').replace('/', ',').replace(';', ',').replace('|', ',').split(',')[::-1] if char), None),
+            'street': lambda x:  x.find('span', {'class': 'property-card__address'}).text.strip().split('-')[::-1][2].split(',')[0],
             'number': lambda x: int(''.join(char for char in x.find('span', {'class': 'property-card__address'}).text.strip() if char.isdigit())) or None,
-            'neighborhood': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().replace('-', ',').replace('/', ',').replace(';', ',').replace('|', ',').split(',')[::-1][2] if len(x.find('span', {'class': 'js-card-title'}).text.strip().replace('-', ',').replace('/', ',').replace(';', ',').replace('|', ',').split(',')[::-1]) > 2 else None,
+            'neighborhood': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().replace('-',',').split(',')[-3],
             'rooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]))),
-            'bathrooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-bathroom'}).text.strip()[0]))),
-            'parkingspaces': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-garage'}).text.strip()[0]))),
-            'periodicity': lambda x: x.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[1].split(' ')[0],
+            'bathrooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-bathroom'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
+            'parkingspaces': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-garage'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
+            'periodicity': lambda x: x.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('\n','').replace('.','').split('/')[1].split(' ')[0],
             'title': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip(),
             'area': lambda x: int(''.join(re.findall(r'\d', x.find('span', {'class': 'js-property-card-detail-area'}).text.strip()))),
-            'price': lambda x: x.find('div', {'class': 'property-card__price'}).text.replace('R$', '').replace('.', '').split('/')[0],
-            'condoprice': lambda x: x.find('strong', {'class': 'js-condo-price'}).replace('R$', '').strip(),
+            'price': lambda x: int(''.join(re.findall(r'\d',x.find('div', {'class': 'property-card__price'}).text))),
+            'condoprice': lambda x: int(''.join(re.findall(r'\d', x.find('strong', {'class': 'js-condo-price'}).text.replace('R$ ', '')))),
             'amenities': lambda x: '; '.join(tag.text.strip() for tag in x.find_all('li', {'class': 'amenities__item'}))
         }
         return cases.get(value_id)
