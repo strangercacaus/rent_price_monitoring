@@ -3,11 +3,20 @@ from datetime import datetime, date
 import requests
 import time
 import re
+import os
 from random import randint
 from abc import ABC, abstractmethod, abstractproperty
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support import expected_conditions
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.webdriver.support import expected_conditions as EC
 
 # Módulos Personalizados
 from utils import ProxyConfig, ResultSet
@@ -59,7 +68,7 @@ class ListingAPI(ABC):
         api.dump_result_set(path='/caminho/para/salvar/', format='csv')
     """
 
-    def __init__(self, cidade:str, delay_seconds:int=0, proxy:ProxyConfig=None) -> None:
+    def __init__(self, cidade:str,  webdriver:webdriver, proxy:ProxyConfig=None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -70,13 +79,10 @@ class ListingAPI(ABC):
             cidade: Uma string representando a cidade a ser monitorada.
             delay_seconds: Opcional, um número inteiro representando o atraso em segundos entre as requisições sequenciais.
         """
-        self.current_page = 1
         self.city = cidade
-        self.delay_seconds = delay_seconds
-        self._last_http_response = None
         self.result_set = ResultSet()
         self.proxy = proxy
-
+        self.webdriver = webdriver
     @property
     @abstractmethod
     def type(self) -> str:
@@ -87,60 +93,26 @@ class ListingAPI(ABC):
     def endpoint(self) -> str:
         pass
 
-    @property
-    def _first_page(self) -> bs4.BeautifulSoup:
-        """
-        Obtém a resposta HTML da primeira página e a processa no format bs4.BeautifulSoup.
-
-        Retorna:
-            Um objeto BeautifulSoup representando a resposta HTML analisada.
-        """
-        response = self._extract_current_page()
-        return self._parse_html_response(response=response)
-    
-    @property
-    def _results_per_page(self) -> int:
-        """
-        Obtém o número de resultados por página a partir do total de resultados e número de resultados da primeira página.
-
-        Retorna:
-            Um número inteiro representando o número de resultados por página.
-        """
-        soup = self._first_page
-        listings = self._extract_listings_from_soup(soup=soup)
-        return len(listings)
-    
-    
-    @property
-    @abstractmethod
-    def _result_count(self) -> int:
-        pass
-    
-    
-    @abstractmethod
-    def _get_endpoint(self) -> str:
-        pass
-    
-    @abstractmethod
-    def _get_new_page_number(self, page:bs4.BeautifulSoup, method='seq') -> int:
-        """
-        Obtém um novo número de página dentro do total de resultados.
-
-        Args:
-            method - 'seq' ou 'rand', seq varre as páginas uma a uma, enquanto 'rand' seleciona páginas
-            aleatórias entre as possíveis para a quantidade de resultados.
-
-        Retorna:
-            Um inteiro representando o novo número de página.
-        """
-        pass
-
     @abstractmethod 
-    def _extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
+    def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
         pass
 
     @abstractmethod
     def load_extractor(self, value_id:str) -> callable:
+        pass
+    
+    @abstractmethod
+    def ingest_pages(self, output_path:str, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
+        """
+        Executa uma rotina de ingestão com base nos argumentos fornecidos.
+
+        Args:
+            all: Um booleano indicando se todos os anúncios devem ser ingeridos ou não, por padrão True.
+            max_attempts: Um inteiro representando o número máximo de tentativas, por padrão None.
+
+        Retorna:
+            None.
+        """
         pass
     
     def extract_value(self, listing, value_id):
@@ -152,7 +124,7 @@ class ListingAPI(ABC):
         except Exception as e:
             print(f'{__class__}.{__name__} Exception: {e}')
     
-    def _format_listing(self, listing=None) -> dict:
+    def format_listing(self, listing=None) -> dict:
         return dict(
             data = datetime.now(),
             fonte = self.type,
@@ -173,45 +145,8 @@ class ListingAPI(ABC):
             url = self.extract_value(value_id='url', listing=listing),
             amenities = self.extract_value(value_id='amenities', listing=listing)
         )
-
-    def _extract_current_page(self, max_retries=6, backoff_factor=4) -> requests.models.Response:
-        """
-        Extrai a página atual da API e atualiza a propriedade .last_http_response.
-
-        Args:
-            max_retries: Um inteiro representando o número máximo de tentativas em caso de erro HTTP.
-            backoff_factor: Um inteiro representando o fator de espera exponencial.
-
-        Retorna:
-            Um objeto requests.models.Response representando a resposta HTTP.
-        """
-        retries = 0
-        while retries < max_retries:
-            url = self._get_endpoint()
-            print(f'Getting page at {url}')
-            if retries > 0 or self.current_page > 1:
-                time.sleep(self.delay_seconds)
-            response = requests.get(
-                url= url,
-                proxies = self.proxy.proxy_list if self.proxy is not None else None
-                )
-            
-            self._last_http_response = response.status_code
-            
-            if response.status_code < 300:  # Sucesso
-                return response
-            
-            elif response.status_code == 429:  # Too many requests
-                print(f"Rate limited. Retrying in {backoff_factor ** retries} seconds.")
-                time.sleep(backoff_factor ** retries)
-                retries += 1
-                
-            else:
-                print(f"Request failed with status code {response.status_code}")
-                return None
-
     
-    def _parse_html_response(self, response=None) -> bs4.BeautifulSoup:
+    def parse_html(self, file=None) -> bs4.BeautifulSoup:
         """
         Transforma o conteúdo html da response em um objeto bs4.BeautifulSoup.
 
@@ -221,16 +156,9 @@ class ListingAPI(ABC):
         Retorna:
             Um objeto BeautifulSoup representando a resposta HTML analisada.
         """
-        if response and response.status_code < 300:
-            return bs4.BeautifulSoup(response.text, features="html5lib")
-        elif response:
-            print(f'No valid response to be parsed. Status code {response.status_code}.')
-            return None
-        else:
-            print('Empty request')
-
+        return bs4.BeautifulSoup(file, features="html5lib")
     
-    def _append_formatted_listing(self, listing:dict=None) -> None:
+    def append_formatted_listing(self, listing:dict=None) -> None:
         url = listing.get('url')
         """
         Adiciona o anúncio formatado ao conjunto de resultados.
@@ -253,7 +181,7 @@ class ListingAPI(ABC):
         else:
             return False
     
-    def _ingest_current_page(self) -> None:
+    def process_current_page(self, page) -> None:
         """
         Ingere a página atual de anúncios utilizando os métodos internos da API.
 
@@ -271,14 +199,12 @@ class ListingAPI(ABC):
             None.
         """
         try:
-            print(f'Current_page: {self.current_page}')
-            response = self._extract_current_page()
-            soup = self._parse_html_response(response=response)
-            listings = self._extract_listings_from_soup(soup=soup)
+            soup = self.parse_html(response=page)
+            listings = self.extract_listings_from_soup(soup=soup)
             added_listings = 0
             for i in listings:
-                formatted = self._format_listing(listing = i)
-                success = self._append_formatted_listing(listing=formatted)
+                formatted = self.format_listing(listing = i)
+                success = self.append_formatted_listing(listing=formatted)
                 if success == True:
                     added_listings += 1
         except Exception as e:
@@ -287,40 +213,14 @@ class ListingAPI(ABC):
             print(f'{added_listings} novos anúncios adicionados na página {self.current_page}')
             print(f'{formatted}')
             self.current_page = self._get_new_page_number(page=soup)
-    
-    def ingest_listings(self, all=True, max_attempts=None) -> None:
-        """
-        Executa uma rotina de ingestão com base nos argumentos fornecidos.
-
-        Args:
-            all: Um booleano indicando se todos os anúncios devem ser ingeridos ou não, por padrão True.
-            max_attempts: Um inteiro representando o número máximo de tentativas, por padrão None.
-
-        Retorna:
-            None.
-        """
-        attempts = 0
-        if all == True:
-            while self.result_set.shape[0] < self._result_count:
-                    self._ingest_current_page()
-                    attempts += 1
-                    print(f'Current page: {self.current_page}')
-        elif max_attempts:
-            if type(max_attempts) == int and max_attempts > 0:
-                self.current_page = 1
-                while attempts <= max_attempts:
-                    self._ingest_current_page()
-                    attempts += 1
-            else:
-                raise TypeError('pages_number: This parameter only accepts numbers above zero.')
 
 class VivaRealApi(ListingAPI):
-    def __init__(self,cidade:str,delay_seconds:int=0, proxy:ProxyConfig=None):
-        super().__init__(cidade=cidade,delay_seconds=delay_seconds,proxy=proxy)
+    def __init__(self, cidade:str,  webdriver:webdriver, proxy:ProxyConfig=None):
+        super().__init__(cidade=cidade, webdriver=webdriver, proxy=proxy)
 
     @property
     def type(self) -> str:
-        return 'Viva Real'
+        return 'Vivareal'
 
     @property
     def endpoint(self) -> str:
@@ -330,44 +230,53 @@ class VivaRealApi(ListingAPI):
         Retorna:
             Uma string representando o endpoint base da API.
         """
-        return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/?pagina='
+        return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/'
     
-    @property
-    def _result_count(self) -> int:
+    
+    def ingest_pages(self, output_path:str, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
         """
-        Obtém o número total de resultados divulgados pelo portal para a cidade atribuída.
-        
-        O valor é obtido a partir da identificação de um elemento 'Strong' da classe 'results-summary__count'
-
-        Retorna:
-            Um número inteiro representando a quantidade total de resultados fornecida pelo portal.
-        """
-        soup = self._first_page
-        try:
-            return int(soup.find('strong',{'class':'results-summary__count'}).text.replace('.',''))
-        except Exception:
-            print(f'No houses were found for the given page.\n the HTML structure of the page might have been altered...\n{Exception}')
-            return 0
-        
-    def _get_new_page_number(self, page:bs4.BeautifulSoup, method='seq') -> int:
-        """
-        Obtém um novo número de página dentro do total de resultados.
+        Ingere várias páginas de dados da API e salva o conteúdo HTML em arquivos na camada RAW.
 
         Args:
-            method - 'seq' ou 'rand', seq varre as páginas uma a uma, enquanto 'rand' seleciona páginas
-            aleatórias entre as possíveis para a quantidade de resultados.
+            output_path (str): O caminho para o diretório onde os arquivos HTML serão salvos.
+            filename_pattern (str): O padrão para os nomes dos arquivos HTML salvos.
+            all (bool, opcional): Um booleano indicando se todas as páginas disponíveis devem ser ingeridas (padrão é True).
+            pages (int, opcional): O número máximo de páginas a serem ingeridas (padrão é None).
 
-        Retorna:
-            Um inteiro representando o novo número de página.
+        Returns:
+            None.
+
+        Raises:
+            None.
+
         """
-        if method == 'seq':
-            return int(page.find('button',{"class": 'js-change-page', "title": "Próxima página"})['data-page'])
-        elif method == 'rand':
-            return randint(1,round(self._result_count/self._results_per_page))
-        else:
-            raise ValueError('Erro: O parâmetro "method" aceita os valores "seq" | "rand"')
+        driver = self.webdriver
+        driver.set_window_size(1366, 800)
+        driver.get(self.endpoint)
+        page = 1
+        file_name = f'{filename_pattern}{page}'
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+        while True:
+            try:
+                file_path = os.path.join(output_path,filename_pattern,page,'.html')
+                html_content = driver.page_source
+                soup = bs4.BeautifulSoup(html_content, features="html5lib")
+                with open(f'{file_path}', 'w', encoding='utf-8') as file:
+                    file.write(soup.prettify())
+                time.sleep(delay_seconds)
+                driver.execute_script("window.scrollTo(0,9800)")
+                driver.find_element(By.CSS_SELECTOR, ".pagination__item:nth-child(9) > .js-change-page").click()
+            except Exception as e:
+                print(f'An Exception Occurred: {e}')
+                break
+            else:
+                page += 1
+                if not all and page >= pages:
+                    break
+        return page
     
-    def _extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
+    def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
         """
         Extrai as listagens de anúncios do objeto bs4.BeautifulSoup.
 
@@ -381,15 +290,6 @@ class VivaRealApi(ListingAPI):
             Um objeto ResultSet contendo as listagens extraídas.
         """
         return soup.find_all('article', {'class': 'property-card__container js-property-card'})
-
-    def _get_endpoint(self) -> str:
-        """
-        Obtém o endpoint da API com base no endpoint base e a página atual.
-
-        Retorna:
-            Uma string representando o endpoint da API pronto para extração.
-        """
-        return f'{self.endpoint}{self.current_page}'
 
     def load_extractor(self, value_id: str) -> callable:
         cases = {
