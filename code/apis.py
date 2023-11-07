@@ -255,7 +255,6 @@ class VivaRealApi(ListingAPI):
         driver = self.webdriver
         driver.set_window_size(1366, 800)
         driver.get(self.endpoint)
-        s3Client = self.s3
         page = 1
         while all or (pages is not None and page < pages):
             try:
