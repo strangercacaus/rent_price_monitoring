@@ -2,12 +2,10 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import base64
-import boto3
-from botocore import exceptions
-from botocore.exceptions import ClientError
-import logging
 from dotenv import load_dotenv
 from os import getenv
+import pyarrow.parquet as pq
+import pyarrow as pa
 
 class ProxyConfig():
     """

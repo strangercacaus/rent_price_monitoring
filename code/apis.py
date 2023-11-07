@@ -1,22 +1,16 @@
 # Builtins
-from datetime import datetime, date
-import requests
+from datetime import datetime
 import time
 import re
 import io
-from random import randint
-from abc import ABC, abstractmethod, abstractproperty
+from abc import ABC, abstractmethod
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support import expected_conditions
-from selenium.webdriver.support.wait import WebDriverWait
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-from selenium.webdriver.support import expected_conditions as EC
+import pyarrow.parquet as pq
+import pyarrow as pa
 import boto3
 
 # Módulos Personalizados
@@ -69,7 +63,7 @@ class ListingAPI(ABC):
         api.dump_result_set(path='/caminho/para/salvar/', format='csv')
     """
 
-    def __init__(self, cidade:str,  webdriver:webdriver, s3:boto3.client = None, proxy:ProxyConfig=None) -> None:
+    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None, proxy:ProxyConfig=None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -116,7 +110,7 @@ class ListingAPI(ABC):
             None.
         """
         pass
-    
+        
     def extract_value(self, listing, value_id):
         try:
             func = self.load_extractor(value_id)
@@ -148,7 +142,7 @@ class ListingAPI(ABC):
             amenities = self.extract_value(value_id='amenities', listing=listing)
         )
     
-    def parse_html(self, file=None) -> bs4.BeautifulSoup:
+    def parse_html(self, html=None) -> bs4.BeautifulSoup:
         """
         Transforma o conteúdo html da response em um objeto bs4.BeautifulSoup.
 
@@ -158,7 +152,7 @@ class ListingAPI(ABC):
         Retorna:
             Um objeto BeautifulSoup representando a resposta HTML analisada.
         """
-        return bs4.BeautifulSoup(file, features="html5lib")
+        return bs4.BeautifulSoup(html, features="html5lib")
     
     def append_formatted_listing(self, listing:dict=None) -> None:
         url = listing.get('url')
@@ -182,8 +176,9 @@ class ListingAPI(ABC):
             return False
         else:
             return False
+        
     
-    def process_current_page(self, page) -> None:
+    def process_file(self, file) -> None:
         """
         Ingere a página atual de anúncios utilizando os métodos internos da API.
 
@@ -201,7 +196,7 @@ class ListingAPI(ABC):
             None.
         """
         try:
-            soup = self.parse_html(response=page)
+            soup = self.parse_html(html=file)
             listings = self.extract_listings_from_soup(soup=soup)
             added_listings = 0
             for i in listings:
@@ -210,14 +205,37 @@ class ListingAPI(ABC):
                 if success == True:
                     added_listings += 1
         except Exception as e:
-            print(f'Something went wrong while formating the listings of the page {self.current_page}: {e}')
+            print(f'Something went wrong while formating the listings of the current file: {e}')
         else:
-            print(f'{added_listings} novos anúncios adicionados na página {self.current_page}')
-            print(f'{formatted}')
-            self.current_page = self._get_new_page_number(page=soup)
+            print(f'{added_listings} new listings added to result set')
+            
+
+    def process_folder(self, bucket_name: str, folder_path: str, filename_pattern:str, output_format: str = None, max_pages : int = None):
+        if output_format is None:
+            output_format = ['csv','parquet']
+        if output_format not in ['csv', 'parquet']:
+            raise ValueError("Output Format must be one of 'csv', 'parquet'")
+            
+        s3objects = self.s3.list_objects_v2(Bucket=bucket_name, Prefix=folder_path)
+        pages = 1
+        for obj in s3objects.get('Contents', []):
+            file_name = obj['Key']
+            if file_name.endswith('.html'):
+                response = self.s3.get_object(Bucket=bucket_name, Key=file_name)
+                html_content = response['Body'].read().decode('utf-8')
+                self.process_file(html_content)
+                pages += 1
+            if max_pages and (pages > max_pages):
+                break
+        file_path = f'pipeline/processed/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{datetime.now()}.{output_format}'
+        table = pa.Table.from_pandas(self.result_set)
+        output_buffer = io.BytesIO()
+        pq.write_table(table, output_buffer)
+        output_buffer.seek(0)
+        self.s3.upload_fileobj(output_buffer, bucket_name, file_path)      
 
 class VivaRealApi(ListingAPI):
-    def __init__(self, cidade:str,  webdriver:webdriver, s3:boto3.client = None, proxy:ProxyConfig=None):
+    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None, proxy:ProxyConfig=None):
         super().__init__(cidade=cidade, webdriver=webdriver, s3=s3, proxy=proxy)
 
     @property
@@ -234,8 +252,8 @@ class VivaRealApi(ListingAPI):
         """
         return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/'
     
-    
-    def ingest_pages(self, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
+
+    def ingest_pages(self, filename_pattern:str, all:bool=True, max_pages:int=None, delay_seconds:int=0) -> None:
         """
         Ingere várias páginas de dados da API e salva o conteúdo HTML em arquivos na camada RAW.
 
@@ -256,11 +274,12 @@ class VivaRealApi(ListingAPI):
         driver.set_window_size(1366, 800)
         driver.get(self.endpoint)
         page = 1
-        while all or (pages is not None and page < pages):
+        while all or (max_pages is not None and page < max_pages):
             try:
                 html_content = driver.page_source
                 file_obj = io.BytesIO(html_content.encode())
-                s3Client.upload_fileobj(file_obj, 'floriparentpricing', f'raw/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{page}.html')
+                file_path = f'pipeline/raw/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{page}.html'
+                self.s3.upload_fileobj(file_obj, 'floriparentpricing', file_path)
                 driver.execute_script("window.scrollTo(0,9800)")
                 driver.find_element(By.CSS_SELECTOR, ".pagination__item:nth-child(9) > .js-change-page").click()
                 time.sleep(delay_seconds)
