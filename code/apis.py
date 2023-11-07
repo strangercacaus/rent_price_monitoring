@@ -3,7 +3,7 @@ from datetime import datetime, date
 import requests
 import time
 import re
-import os
+import io
 from random import randint
 from abc import ABC, abstractmethod, abstractproperty
 
@@ -17,6 +17,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.support import expected_conditions as EC
+import boto3
 
 # Módulos Personalizados
 from utils import ProxyConfig, ResultSet
@@ -68,7 +69,7 @@ class ListingAPI(ABC):
         api.dump_result_set(path='/caminho/para/salvar/', format='csv')
     """
 
-    def __init__(self, cidade:str,  webdriver:webdriver, proxy:ProxyConfig=None) -> None:
+    def __init__(self, cidade:str,  webdriver:webdriver, s3:boto3.client = None, proxy:ProxyConfig=None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -82,6 +83,7 @@ class ListingAPI(ABC):
         self.city = cidade
         self.result_set = ResultSet()
         self.proxy = proxy
+        self.s3 = s3
         self.webdriver = webdriver
     @property
     @abstractmethod
@@ -102,7 +104,7 @@ class ListingAPI(ABC):
         pass
     
     @abstractmethod
-    def ingest_pages(self, output_path:str, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
+    def ingest_pages(self, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
         """
         Executa uma rotina de ingestão com base nos argumentos fornecidos.
 
@@ -215,8 +217,8 @@ class ListingAPI(ABC):
             self.current_page = self._get_new_page_number(page=soup)
 
 class VivaRealApi(ListingAPI):
-    def __init__(self, cidade:str,  webdriver:webdriver, proxy:ProxyConfig=None):
-        super().__init__(cidade=cidade, webdriver=webdriver, proxy=proxy)
+    def __init__(self, cidade:str,  webdriver:webdriver, s3:boto3.client = None, proxy:ProxyConfig=None):
+        super().__init__(cidade=cidade, webdriver=webdriver, s3=s3, proxy=proxy)
 
     @property
     def type(self) -> str:
@@ -233,7 +235,7 @@ class VivaRealApi(ListingAPI):
         return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/'
     
     
-    def ingest_pages(self, output_path:str, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
+    def ingest_pages(self, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
         """
         Ingere várias páginas de dados da API e salva o conteúdo HTML em arquivos na camada RAW.
 
@@ -253,29 +255,22 @@ class VivaRealApi(ListingAPI):
         driver = self.webdriver
         driver.set_window_size(1366, 800)
         driver.get(self.endpoint)
+        s3Client = self.s3
         page = 1
-        file_name = f'{filename_pattern}{page}'
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
-        while True:
+        while all or (pages is not None and page < pages):
             try:
-                file_path = os.path.join(output_path,filename_pattern,page,'.html')
                 html_content = driver.page_source
-                soup = bs4.BeautifulSoup(html_content, features="html5lib")
-                with open(f'{file_path}', 'w', encoding='utf-8') as file:
-                    file.write(soup.prettify())
-                time.sleep(delay_seconds)
+                file_obj = io.BytesIO(html_content.encode())
+                s3Client.upload_fileobj(file_obj, 'floriparentpricing', f'raw/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{page}.html')
                 driver.execute_script("window.scrollTo(0,9800)")
                 driver.find_element(By.CSS_SELECTOR, ".pagination__item:nth-child(9) > .js-change-page").click()
-            except Exception as e:
-                print(f'An Exception Occurred: {e}')
-                break
-            else:
+                time.sleep(delay_seconds)
                 page += 1
-                if not all and page >= pages:
-                    break
-        return page
-    
+            except Exception as e:
+                print(f': An Exception Occurred: {e}')
+                break
+        return True
+
     def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
         """
         Extrai as listagens de anúncios do objeto bs4.BeautifulSoup.
