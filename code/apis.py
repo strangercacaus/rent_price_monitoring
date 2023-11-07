@@ -1,37 +1,20 @@
 # Builtins
-from datetime import datetime, date
-import requests
+from datetime import datetime
 import time
 import re
-import base64
-from random import randint
-from abc import ABC, abstractmethod, abstractproperty
+import io
+from abc import ABC, abstractmethod
 
 # Bibliotecas Externas
-import pandas as pd
-import bs4
-# import html5lib
+import bs4 #BeautifulSoup - Lida com estruturas de dados html
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+import pyarrow.parquet as pq
+import pyarrow as pa
+import boto3
 
-class ResultSet(pd.DataFrame):
-    def __init__(self):
-        super().__init__(
-            data={'data': pd.Series(dtype='datetime64[ns]'),
-                'fonte': pd.Series(dtype='str'),
-                'descricao': pd.Series(dtype='str'),
-                'endereco': pd.Series(dtype='str'),
-                'rua': pd.Series(dtype='str'),
-                'numero': pd.Series(dtype='int'),
-                'bairro': pd.Series(dtype='str'),
-                'cidade': pd.Series(dtype='str'),
-                'valor': pd.Series(dtype='float'),
-                'periodicidade': pd.Series(dtype='str'),
-                'condominio': pd.Series(dtype='float'),
-                'area': pd.Series(dtype='float'),
-                'qtd_banheiros': pd.Series(dtype='int'),
-                'qtd_quartos': pd.Series(dtype='int'),
-                'qtd_vagas': pd.Series(dtype='int'),
-                'url': pd.Series(dtype='str')
-                    })
+# Módulos Personalizados
+from utils import ProxyConfig, ResultSet
 
 class ListingAPI(ABC):
     """
@@ -80,7 +63,7 @@ class ListingAPI(ABC):
         api.dump_result_set(path='/caminho/para/salvar/', format='csv')
     """
 
-    def __init__(self, cidade:str, delay_seconds=0) -> None:
+    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None, proxy:ProxyConfig=None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -91,12 +74,11 @@ class ListingAPI(ABC):
             cidade: Uma string representando a cidade a ser monitorada.
             delay_seconds: Opcional, um número inteiro representando o atraso em segundos entre as requisições sequenciais.
         """
-        self.current_page = 1
         self.city = cidade
-        self.delay_seconds = delay_seconds
-        self._last_http_response = None
         self.result_set = ResultSet()
-
+        self.proxy = proxy
+        self.s3 = s3
+        self.webdriver = webdriver
     @property
     @abstractmethod
     def type(self) -> str:
@@ -107,78 +89,60 @@ class ListingAPI(ABC):
     def endpoint(self) -> str:
         pass
 
-    @property
-    def _first_page(self) -> bs4.BeautifulSoup:
-        """
-        Obtém a resposta HTML da primeira página e a processa no format bs4.BeautifulSoup.
-
-        Retorna:
-            Um objeto BeautifulSoup representando a resposta HTML analisada.
-        """
-
-        response = self._extract_current_page()
-        return self._parse_html_response(response=response)
-    
-    @abstractproperty
-    def _result_count(self) -> int:
+    @abstractmethod 
+    def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
         pass
-        
-    @property
-    def _results_per_page(self) -> int:
-        """
-        Obtém o número de resultados por página a partir do total de resultados e número de resultados da primeira página.
 
-        Retorna:
-            Um número inteiro representando o número de resultados por página.
-        """
-        soup = self._first_page
-        listings = self._extract_listings_from_soup(soup=soup)
-        return len(listings)
+    @abstractmethod
+    def load_extractor(self, value_id:str) -> callable:
+        pass
     
     @abstractmethod
-    def _get_endpoint(self) -> str:
-        pass
-    
-    def _get_new_page_number(self) -> int:
+    def ingest_pages(self, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
         """
-        Obtém um novo número de página dentro do total de resultados.
-
-        Retorna:
-            Um inteiro representando o novo número de página.
-        """
-        return randint(1,round(self._result_count/self._results_per_page))
-    
-    def _extract_current_page(self, max_retries=5, backoff_factor=2) -> requests.models.Response:
-        """
-        Extrai a página atual da API e atualiza a propriedade .last_http_response.
+        Executa uma rotina de ingestão com base nos argumentos fornecidos.
 
         Args:
-            max_retries: Um inteiro representando o número máximo de tentativas em caso de erro HTTP.
-            backoff_factor: Um inteiro representando o fator de espera exponencial.
+            all: Um booleano indicando se todos os anúncios devem ser ingeridos ou não, por padrão True.
+            max_attempts: Um inteiro representando o número máximo de tentativas, por padrão None.
 
         Retorna:
-            Um objeto requests.models.Response representando a resposta HTTP.
+            None.
         """
-        retries = 0
-        while retries < max_retries:
-            if self.current_page > 1:
-                time.sleep(self.delay_seconds)
-            endpoint = self._get_endpoint()
-            print(endpoint)
-            response = requests.get(self._get_endpoint())
-            if response.status_code < 300:  # Successful response
-                self._last_http_response = response.status_code
-                return response
-            elif response.status_code == 429:  # Too many requests
-                print(f"Rate limited. Retrying in {backoff_factor ** retries} seconds.")
-                time.sleep(backoff_factor ** retries)
-                retries += 1
-            else:
-                print(f"Request failed with status code {response.status_code}")
-                self._last_http_response = response.status_code
-                return None
+        pass
+        
+    def extract_value(self, listing, value_id):
+        try:
+            func = self.load_extractor(value_id)
+            return func(listing)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        except Exception as e:
+            print(f'{__class__}.{__name__} Exception: {e}')
     
-    def _parse_html_response(self, response=None) -> bs4.BeautifulSoup:
+    def format_listing(self, listing=None) -> dict:
+        return dict(
+            data = datetime.now(),
+            fonte = self.type,
+            id = self.extract_value(value_id='id', listing=listing),
+            descricao = self.extract_value(value_id='title', listing=listing),
+            endereco = self.extract_value(value_id='address', listing=listing),
+            rua = self.extract_value(value_id='street', listing=listing),
+            numero = self.extract_value(value_id='number', listing=listing),
+            bairro = self.extract_value(value_id='neighborhood', listing=listing),
+            cidade = self.city,
+            valor = self.extract_value(value_id='price', listing=listing),
+            periodicidade = self.extract_value(value_id='periodicity', listing=listing),
+            condominio = self.extract_value(value_id='condoprice', listing=listing),
+            area = self.extract_value(value_id='area', listing=listing),
+            qtd_banheiros = self.extract_value(value_id='bathrooms', listing=listing),
+            qtd_quartos = self.extract_value(value_id='rooms', listing=listing),
+            qtd_vagas = self.extract_value(value_id='parkingspaces', listing=listing),
+            url = self.extract_value(value_id='url', listing=listing),
+            amenities = self.extract_value(value_id='amenities', listing=listing)
+        )
+    
+    def parse_html(self, html=None) -> bs4.BeautifulSoup:
         """
         Transforma o conteúdo html da response em um objeto bs4.BeautifulSoup.
 
@@ -188,36 +152,10 @@ class ListingAPI(ABC):
         Retorna:
             Um objeto BeautifulSoup representando a resposta HTML analisada.
         """
-        if response and response.status_code < 300:
-            return bs4.BeautifulSoup(response.text, features="html5lib")
-        elif response:
-            print(f'No valid response to be parsed. Status code {response.status_code}.')
-            return None
-        else:
-            print('Empty request')
-
-    @abstractmethod 
-    def _extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
-        pass
-
-    @abstractmethod
-    def extract_address(self, string) -> dict:
-        pass
+        return bs4.BeautifulSoup(html, features="html5lib")
     
-    def _extract_attribute(self, listing, tag, attr, default, post_process=None):
-        try:
-            result = listing.find(tag, attr)
-            if post_process:
-                result = post_process(result)
-            return result
-        except Exception as e:
-            return e
-
-    @abstractmethod
-    def _format_listing(self, listing=None) -> list:
-        pass
-    
-    def _append_formatted_listing(self, listing=None) -> None:
+    def append_formatted_listing(self, listing:dict=None) -> None:
+        url = listing.get('url')
         """
         Adiciona o anúncio formatado ao conjunto de resultados.
 
@@ -228,16 +166,19 @@ class ListingAPI(ABC):
             None
         """
         try:
-            if listing[-1] not in self.result_set['url'].to_list():
+            if url not in self.result_set['url'].to_list():
                 self.result_set.loc[self.result_set.shape[0]] = listing
                 return True
-        except Exception:
-            print(f'Error appending the following listing:\n{listing}, {Exception}')
+            else:
+                print(f'{url} Already exists in the result_set')
+        except Exception as e:
+            print(f'Error appending the following listing:\n{listing}, {e}')
             return False
         else:
             return False
+        
     
-    def _ingest_current_page(self) -> None:
+    def process_file(self, file) -> None:
         """
         Ingere a página atual de anúncios utilizando os métodos internos da API.
 
@@ -255,55 +196,51 @@ class ListingAPI(ABC):
             None.
         """
         try:
-            print(f'Current_page: {self.current_page}')
-            response = self._extract_current_page()
-            soup = self._parse_html_response(response=response)
-            listings = self._extract_listings_from_soup(soup=soup)
+            soup = self.parse_html(html=file)
+            listings = self.extract_listings_from_soup(soup=soup)
             added_listings = 0
             for i in listings:
-                formatted = self._format_listing(listing = i)
-                success = self._append_formatted_listing(listing=formatted)
+                formatted = self.format_listing(listing = i)
+                success = self.append_formatted_listing(listing=formatted)
                 if success == True:
                     added_listings += 1
-        except Exception:
-            print(f'Something went wrong while formating the listings of the page {self.current_page}: {Exception}')
+        except Exception as e:
+            print(f'Something went wrong while formating the listings of the current file: {e}')
         else:
-            print(f'{added_listings} novos anúncios adicionados na página {self.current_page}')
-            print(f'{formatted}')
-            self.current_page = self._get_new_page_number()
-    
-    def ingest_listings(self, all=True, max_attempts=None) -> None:
-        """
-        Executa uma rotina de ingestão com base nos argumentos fornecidos.
+            print(f'{added_listings} new listings added to result set')
+            
 
-        Args:
-            all: Um booleano indicando se todos os anúncios devem ser ingeridos ou não, por padrão True.
-            max_attempts: Um inteiro representando o número máximo de tentativas, por padrão None.
-
-        Retorna:
-            None.
-        """
-        attempts = 0
-        if all == True:
-            while self.result_set.shape[0] < self._result_count:
-                    self._ingest_current_page()
-                    attempts += 1
-        elif max_attempts:
-            if type(max_attempts) == int and max_attempts > 0:
-                self.current_page = 1
-                while attempts <= max_attempts:
-                    self._ingest_current_page()
-                    attempts += 1
-            else:
-                raise TypeError('pages_number: This parameter only accepts numbers above zero.')
+    def process_folder(self, bucket_name: str, folder_path: str, filename_pattern:str, output_format: str = None, max_pages : int = None):
+        if output_format is None:
+            output_format = ['csv','parquet']
+        if output_format not in ['csv', 'parquet']:
+            raise ValueError("Output Format must be one of 'csv', 'parquet'")
+            
+        s3objects = self.s3.list_objects_v2(Bucket=bucket_name, Prefix=folder_path)
+        pages = 1
+        for obj in s3objects.get('Contents', []):
+            file_name = obj['Key']
+            if file_name.endswith('.html'):
+                response = self.s3.get_object(Bucket=bucket_name, Key=file_name)
+                html_content = response['Body'].read().decode('utf-8')
+                self.process_file(html_content)
+                pages += 1
+            if max_pages and (pages > max_pages):
+                break
+        file_path = f'pipeline/processed/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{datetime.now()}.{output_format}'
+        table = pa.Table.from_pandas(self.result_set)
+        output_buffer = io.BytesIO()
+        pq.write_table(table, output_buffer)
+        output_buffer.seek(0)
+        self.s3.upload_fileobj(output_buffer, bucket_name, file_path)      
 
 class VivaRealApi(ListingAPI):
-    def __init__(self,cidade:str,delay_seconds:int=0):
-        super().__init__(cidade=cidade,delay_seconds=delay_seconds)
+    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None, proxy:ProxyConfig=None):
+        super().__init__(cidade=cidade, webdriver=webdriver, s3=s3, proxy=proxy)
 
     @property
     def type(self) -> str:
-        return 'Viva Real'
+        return 'Vivareal'
 
     @property
     def endpoint(self) -> str:
@@ -313,26 +250,46 @@ class VivaRealApi(ListingAPI):
         Retorna:
             Uma string representando o endpoint base da API.
         """
-        return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/?pagina='
+        return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/'
     
-    @property
-    def _result_count(self) -> int:
-        """
-        Obtém o número total de resultados divulgados pelo portal para a cidade atribuída.
-        
-        O valor é obtido a partir da identificação de um elemento 'Strong' da classe 'results-summary__count'
 
-        Retorna:
-            Um número inteiro representando a quantidade total de resultados fornecida pelo portal.
+    def ingest_pages(self, filename_pattern:str, all:bool=True, max_pages:int=None, delay_seconds:int=0) -> None:
         """
-        soup = self._first_page
-        try:
-            return int(soup.find('strong',{'class':'results-summary__count'}).text.replace('.',''))
-        except Exception:
-            print(f'No houses were found for the given page.\n the HTML structure of the page might have been altered...\n{Exception}')
-            return 0
-    
-    def _extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
+        Ingere várias páginas de dados da API e salva o conteúdo HTML em arquivos na camada RAW.
+
+        Args:
+            output_path (str): O caminho para o diretório onde os arquivos HTML serão salvos.
+            filename_pattern (str): O padrão para os nomes dos arquivos HTML salvos.
+            all (bool, opcional): Um booleano indicando se todas as páginas disponíveis devem ser ingeridas (padrão é True).
+            pages (int, opcional): O número máximo de páginas a serem ingeridas (padrão é None).
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+
+        """
+        driver = self.webdriver
+        driver.set_window_size(1366, 800)
+        driver.get(self.endpoint)
+        page = 1
+        while all or (max_pages is not None and page < max_pages):
+            try:
+                html_content = driver.page_source
+                file_obj = io.BytesIO(html_content.encode())
+                file_path = f'pipeline/raw/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{page}.html'
+                self.s3.upload_fileobj(file_obj, 'floriparentpricing', file_path)
+                driver.execute_script("window.scrollTo(0,9800)")
+                driver.find_element(By.CSS_SELECTOR, ".pagination__item:nth-child(9) > .js-change-page").click()
+                time.sleep(delay_seconds)
+                page += 1
+            except Exception as e:
+                print(f': An Exception Occurred: {e}')
+                break
+        return True
+
+    def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
         """
         Extrai as listagens de anúncios do objeto bs4.BeautifulSoup.
 
@@ -346,274 +303,23 @@ class VivaRealApi(ListingAPI):
             Um objeto ResultSet contendo as listagens extraídas.
         """
         return soup.find_all('article', {'class': 'property-card__container js-property-card'})
-                
-    
-    def extract_address(self, string) -> dict:
-        """
-        Extrai os componentes do endereço de uma string.
 
-        Args:
-            string: Uma string representando o endereço.
-
-        Retorna:
-            Um dicionário contendo os componentes do endereço extraídos (bairro, numero, rua).
-        """
-        string = ''.join([char if char not in "-,/;|." else ',' for char in string])
-        term_list = string.split(',')[::-1]
-        bairro = term_list[2] if len(term_list) > 2 else None
-        numero = int(''.join(re.findall(r'\d', string))) if re.findall(r'\d', string) else None
-        rua = term_list[0] if term_list else None
-        return dict(
-            bairro = bairro,
-            numero = numero,
-            rua = rua
-        )
-
-    
-    def _get_endpoint(self) -> str:
-        """
-        Obtém o endpoint da API com base no endpoint base, página atual e uma seed aleatória.
-
-        Retorna:
-            Uma string representando o endpoint da API pronto para extração.
-        """
-        seed = randint(1,6)
-        append_strings = {
-            1: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
-            2: '',
-            3: '#onde=Florian%C3%B3polis,,,',
-            4: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
-            5: '#onde=Brasil,Santa%20Catarina,Florian%C3%B3polis,,,,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,',
-            6: '#onde=,Santa%20Catarina,Florian%C3%B3polis,,,,,,,city,BR%3ESanta%20Catarina%3ENULL%3EFlorianopolis,,,'
-            }
-        return f'{self.endpoint}{self.current_page}{append_strings[seed]}'
-
-    
-    def _format_listing(self, listing=None) -> list:
-        """
-        Formata as informações do anúncio.
-
-        Args:
-            listing: Um objeto BeautifulSoup representando as informações do anúncio.
-
-        Retorna:
-            Uma lista contendo as informações do anúncio formatadas.
-        """
-        data = datetime.now()
-        fonte = self.type
-        cidade = self.city
-        formatted = []
-        try:
-            descricao = listing.find('span', {'class': 'js-card-title'}).text.strip()
-        except TypeError:
-            descricao = None
-        try:
-            endereco = listing.find('span', {'class': 'property-card__address'}).text.replace('-',',').replace('|','').strip()
-        except TypeError:
-            endereco = ''
-        try:
-            rua = self.extract_address(endereco)['rua']
-        except TypeError:
-            rua = None
-        try:
-            numero = self.extract_address(endereco)['numero']
-        except TypeError:
-            numero = None   
-        try:
-            bairro = self.extract_address(endereco)['bairro']
-        except TypeError:
-            bairro = None
-        try:
-            valor = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[0]
-        except TypeError:
-            valor = None
-        try:
-            periodicidade = listing.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('.','').split('/')[1].split(' ')[0]
-        except TypeError:
-            periodicidade = None
-        try:
-            condominio = listing.find('strong', {'class': 'js-condo-price'}).text.replace('R$','').strip()
-        except TypeError:
-            condominio = None
-        try:
-            area = listing.find('span', {'class': 'js-property-card-detail-area'}).text.strip()
-        except TypeError:
-            area = None
-        try:
-            qtd_banheiros = listing.find('li', {'class': 'property-card__detail-bathroom'}).text.strip()[0]
-            qtd_banheiros = int(''.join(re.findall(r'\d', qtd_banheiros)))
-        except TypeError:
-            qtd_banheiros = None
-        try:
-            qtd_quartos = listing.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]
-            qtd_quartos = int(''.join(re.findall(r'\d', qtd_quartos)))
-        except TypeError:
-            qtd_quartos = None
-        try:
-            qtd_vagas = listing.find('li', {'class': 'property-card__detail-garage'}).text.strip()[0]
-            qtd_vagas = int(''.join(re.findall(r'\d', qtd_vagas)))
-        except TypeError:
-            qtd_vagas = None
-        try:
-            link = 'https://vivareal.com.br' + listing.find('a', {'class': 'property-card__labels-container'})['href']
-        except TypeError:
-            link = None
-        return (data,fonte,descricao,endereco,rua,numero,bairro,cidade,valor,periodicidade,condominio,area,qtd_banheiros,qtd_quartos,qtd_vagas,link)
-# Classe GithubAPI: Gerencia a integração do notebook com o Github
-
-class GithubApi():
-    def __init__(self, token:str, owner:str, repo:str) -> None:
-        """
-        Inicia a classe GithubApi com o token de autenticação, usuário e repositório.
-        
-        Args:
-        - token: string do token pessoal ou fine-grained.
-        - owner: nome de usuário
-        - repo: nome do repositório a ser conectado
-        
-        Retorna:
-        Uma instância do objeto GithubApi
-        """
-        self.token = token
-        self.owner = owner
-        self.repo = repo
-        self.base_url = f'https://api.github.com/repos/{owner}/{repo}'
-        
-    def get_url(self, file_path:str) -> str:
-        """
-        Retorna uma url formatada com os parâmetros da api do usuário
-        
-        Args:
-        - file_path: O caminho para o arquivo dentro do repositório
-        
-        Retorna:
-        URL no formato
-        ```python
-        api.get_url('file.csv')
-        # https://api.github/.com/repos/cacau/florianopolis_rent_pricing_monitoring/file.csv
-        ```
-        """
-        return f'{self.base_url}/contents/{file_path}'
-        
-    def get_file_info(self, file_url) -> str:
-        """
-        Recupera as informações de armazenamento de um arquivo de um repositório do Github
-        
-        Args:
-        = file_url: url do arquivo obtida com a função get_url.
-        
-        Retorna:
-        download_url: Url direta do conteúdo do arquivo.
-        current_sha: chave criptografada com permissão de alterar o arquivo
-        file_url: URL de local do arquivo fornecida pelo github
-        """
-        headers = {'Authorization': f'token {self.token}'}
-        response = requests.get(url=file_url, headers=headers)
-        response.raise_for_status()
-        response_json = response.json()
-        download_url = response_json['download_url']
-        current_sha = response_json['sha']
-        return download_url, current_sha
-    
-    def _download_current_content(self, download_url) -> pd.DataFrame:
-        """
-        Baixa o conteúdo do arquivo a partir da url de download.
-        
-        O Método self._download_current_content analisa a string da url de download para identificar
-        o formato de arquivo e então utiliza um método de extração adequado para o tipo de formato.
-        
-        No momenro apenas o download de arquivos csv está implementado com a função pd.read_csv.
-        
-        Args:
-        - download_url: url do arquivo obtida com a função get_file_info.
-        
-        Retorna:
-        Dataframe Pandas com os valores do arquivo.
-        """
-        extension = download_url.split('.')[-1]
-        if extension == 'csv':
-            return pd.read_csv(download_url,index_col=0)
-        elif extension == 'parquet':
-            return pd.read_csv
-        else:
-            raise TypeError(f'file format {extension} is not supported')
-                
-    def _append_new_content(self,current_content=pd.DataFrame, new_content=pd.DataFrame) -> pd.DataFrame:
-        """
-        Adiciona o conteúdo do novo result_set ao Dataframe existente.
-        
-        Kwargs:
-        - current_content: Dataframe do dataset atual. 
-        - new_content: Dataframe do novo result_set.
-        
-        Retorna:
-        Dataframe Pandas com os valores unidos.
-        """
-        return pd.concat([current_content,new_content])
-    
-    def _get_encoded_content(self, appended_content=pd.DataFrame, file_format='csv'):
-        """
-        Formata o conteúdo do dataframe para inclusão no Github
-        
-        Kwargs:
-        - appended_content: Dataframe com os valores a serem codificados para envio.
-        - file_format: O formato para codificação, CSV por padrão.
-        
-        Retorna:
-        Arquivo base64 na codificação desejada.
-        """
-        if file_format != 'csv':
-            raise TypeError('Unsuported file type in _get_encoded_content method')
-        csv_data = appended_content.to_csv()
-        return base64.b64encode(csv_data.encode()).decode('utf-8')
-    
-    def _put_content(self, headers, data, url) -> requests.models.Response:
-        """
-        Realiza requisição PUT com payload formatado.
-        
-        Kwargs:
-        - appended_content: Dataframe com os valores a serem configurados para envio.
-        
-        Retorna:
-        Arquivo base64 na codificação desejada.
-        """
-        try:
-            response = requests.put(url=url, headers=headers, json=data)
-            response.raise_for_status()
-            return response
-        except requests.HTTPError as http_err:
-            print(f'HTTP error occurred: {http_err}')
-        except Exception as err:
-            print(f'Other error occurred: {err}')
-        finally:
-            if response.status_code == 200:
-                print("File updated successfully.")
-            else:
-                print(f"Failed to update file. Status code: {response.status_code}")
-    
-    def update_file_content(self, file_path, new_content, method='append') -> None:
-        """
-        Realiza o update do conteúdo de um arquivo a partir de um path e um novo conteúdo.
-        
-        Args:
-        - file_path: o caminho do arquivo dentro do repositório.
-        - new_content: o Dataframe com o conteúdo a ser inserido.
-        
-        Kwargs:
-        - method: 'append' Adiciona o novo conteúdo ao existente | 'overwrite' sobrescreve o conteúdo com o novo.
-        """
-        file_url = self.get_url(file_path=file_path)
-        download_url, current_sha = self.get_file_info(file_url)
-        current_content = self._download_current_content(download_url)
-        if method == 'append':
-            appended_content = self._append_new_content(current_content, new_content)
-        elif method == 'overwrite':
-            appended_content = new_content
-        else:
-            raise TypeError('"method" must be one of "append" or "overwrite".')
-        encoded_content = self._get_encoded_content(appended_content)
-        commit_message = "Automatically updated via Kaggle script"
-        headers = {'Authorization': f'token {self.token}'}
-        data = {"message": commit_message,"content": encoded_content,"sha": current_sha}
-        self._put_content(headers=headers, data=data, url=file_url)
-        
+    def load_extractor(self, value_id: str) -> callable:
+        cases = {
+            'id': lambda x: int(''.join(re.findall(r'\d', x.find('a', {'class': 'property-card__content-link js-card-title'})['href'].split('-')[-1]))),
+            'url': lambda x: 'https://vivareal.com.br' + x.find('a', {'class': 'property-card__content-link js-card-title'})['href'],
+            'address': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip(),
+            'street': lambda x:  x.find('span', {'class': 'property-card__address'}).text.strip().split('-')[::-1][2].split(',')[0],
+            'number': lambda x: int(''.join(char for char in x.find('span', {'class': 'property-card__address'}).text.strip() if char.isdigit())) or None,
+            'neighborhood': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().replace('-',',').split(',')[-3],
+            'rooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]))),
+            'bathrooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-bathroom'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
+            'parkingspaces': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-garage'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
+            'periodicity': lambda x: x.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('\n','').replace('.','').split('/')[1].split(' ')[0],
+            'title': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip(),
+            'area': lambda x: int(''.join(re.findall(r'\d', x.find('span', {'class': 'js-property-card-detail-area'}).text.strip()))),
+            'price': lambda x: int(''.join(re.findall(r'\d',x.find('div', {'class': 'property-card__price'}).text))),
+            'condoprice': lambda x: int(''.join(re.findall(r'\d', x.find('strong', {'class': 'js-condo-price'}).text.replace('R$ ', '')))),
+            'amenities': lambda x: '; '.join(tag.text.strip() for tag in x.find_all('li', {'class': 'amenities__item'}))
+        }
+        return cases.get(value_id)

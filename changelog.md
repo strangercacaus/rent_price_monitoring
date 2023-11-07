@@ -1,3 +1,12 @@
+## 28/10/2023:
+
+### Web_Scrapping:
+- Implementada abstração de classes na api VivaRealApi
+- Primeira versão de testes black box implementada
+- Consumo de apis modularizado implementado no Kaggle
+- Criação do mapa de relacionaemnto de classes
+
+
 ## 27/10/2023:
 
 ### Web_Scrapping:
