@@ -2,3 +2,4 @@ env/*
 .env
 *.DS_Store
 *__pycache__*
+scratchpad.ipynb

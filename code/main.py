@@ -1,5 +1,4 @@
-#%% 1 Ingestão
-
+#%% Ingestão
 
 import os
 from selenium import webdriver
@@ -54,4 +53,4 @@ viva.process_folder(bucket_name = 'floriparentpricing',
                     output_format='parquet')
 
 
-# %%
+# %% Consolidação
