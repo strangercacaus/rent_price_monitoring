@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from os import getenv
 import pyarrow.parquet as pq
 import pyarrow as pa
-
+pip
 class ProxyConfig():
     """
     Representa um objeto de configuração de Servidor de Proxy.
