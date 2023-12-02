@@ -3,7 +3,6 @@ from datetime import datetime
 import time
 import re
 import io
-from abc import ABC, abstractmethod
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
@@ -14,56 +13,11 @@ import pyarrow as pa
 import boto3
 
 # Módulos Personalizados
-from utils import ProxyConfig, ResultSet
+from utils import ResultSet
 
-class ListingAPI(ABC):
-    """
-    Uma classe abstrata que representa um portal de anúncios a ser implementado.
+class Extractor():
 
-    Args:
-        cidade: Uma string representando a cidade que será monitorada, sem caracteres especiais ou acentuação.
-        delay_seconds: Opcional - Um valor inteiro para definir o atraso em segundos entre as requisições (0 por padrão).
-
-    Atributos:
-        type: Uma str representando o tipo de API (Viva Real).
-        current_page: Um int representando o número da página atual.
-        city: Uma str representando a cidade da api instanciada.
-        delay_seconds: Um inteiro representando o atraso em segundos entre as requisições sequenciais.
-        _last_http_response: O status_code da última resposta HTTP recebida.
-        result_set: Um DataFrame do pandas representando o conjunto de resultados da sessão ativa de extração de dados.
-
-    Métodos:
-        endpoint: Uma propriedade que retorna o endpoint base da API.
-        _result_count: Uma propriedade que retorna o número total de resultados exibidos pelo portal.
-        _results_per_page: Uma propriedade que retorna o número total de resultados encontrados na primeira página.
-        _first_page: Um método que retorna a resposta HTML analisada em formato bs4.Soup da primeira página.
-        _get_endpoint: Um método interno que retorna um endpoint da API com base na cidade, página e em uma seed randômica.
-        _get_new_page_number: Um método interno que retorna um número de página aleatório com base no tamanho do universo de resultados.
-        _extract_current_page: Um método interno que extrai o html da página atual da API.
-        _parse_html_response: Um método interno que converte o html em um objeto bs4.Soup.
-        _extract_attribute()L Uma função auxiliar da extract_listings responsável por executar a lógica e gerenciar erros.
-        _extract_listings_from_soup: Um método interno que extrai os objetos da classe 'article' do objeto bs4.Soup obtido.
-        _format_listing: Um método que formata uma listagem para inserção no result_set da instância.
-        _append_formatted_listing: Um método interno que adiciona uma listagem formatada ao conjunto de resultados.
-        _ingest_current_page: Um método interno que ingere a página atual de listagens.
-        ingest_listings: Um método que ingere todas as listagens ou um número especificado de páginas com base nos parâmetros fornecidos.
-        dump_result_set: Um método que salva o conjunto de resultados em um arquivo csv.
-
-    Raises:
-        TypeError: Se no método ingest_listings o parâmetro max_attempts não for um inteiro positivo.
-
-    Exemplo:
-        # Criar uma instância de VivaRealApi
-        api = VivaRealApi(cidade='Florianopolis', delay_seconds=2)
-
-        # Ingerir todas as listagens
-        api.ingest_listings(all=True)
-
-        # Salvar o conjunto de resultados em um arquivo CSV
-        api.dump_result_set(path='/caminho/para/salvar/', format='csv')
-    """
-
-    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None, proxy:ProxyConfig=None) -> None:
+    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -76,40 +30,8 @@ class ListingAPI(ABC):
         """
         self.city = cidade
         self.result_set = ResultSet()
-        self.proxy = proxy
         self.s3 = s3
-        self.webdriver = webdriver
-    @property
-    @abstractmethod
-    def type(self) -> str:
-        pass
-        
-    @property
-    @abstractmethod
-    def endpoint(self) -> str:
-        pass
-
-    @abstractmethod 
-    def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
-        pass
-
-    @abstractmethod
-    def load_extractor(self, value_id:str) -> callable:
-        pass
-    
-    @abstractmethod
-    def ingest_pages(self, filename_pattern:str, all:bool=True, pages:int=None, delay_seconds:int=0) -> None:
-        """
-        Executa uma rotina de ingestão com base nos argumentos fornecidos.
-
-        Args:
-            all: Um booleano indicando se todos os anúncios devem ser ingeridos ou não, por padrão True.
-            max_attempts: Um inteiro representando o número máximo de tentativas, por padrão None.
-
-        Retorna:
-            None.
-        """
-        pass
+        self.type = 'Vivareal'
         
     def extract_value(self, listing, value_id):
         try:
@@ -232,15 +154,7 @@ class ListingAPI(ABC):
         output_buffer = io.BytesIO()
         pq.write_table(table, output_buffer)
         output_buffer.seek(0)
-        self.s3.upload_fileobj(output_buffer, bucket_name, file_path)      
-
-class VivaRealApi(ListingAPI):
-    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None, proxy:ProxyConfig=None):
-        super().__init__(cidade=cidade, webdriver=webdriver, s3=s3, proxy=proxy)
-
-    @property
-    def type(self) -> str:
-        return 'Vivareal'
+        self.s3.upload_fileobj(output_buffer, bucket_name, file_path)
 
     @property
     def endpoint(self) -> str:
@@ -252,42 +166,6 @@ class VivaRealApi(ListingAPI):
         """
         return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/'
     
-
-    def ingest_pages(self, filename_pattern:str, all:bool=True, max_pages:int=None, delay_seconds:int=0) -> None:
-        """
-        Ingere várias páginas de dados da API e salva o conteúdo HTML em arquivos na camada RAW.
-
-        Args:
-            output_path (str): O caminho para o diretório onde os arquivos HTML serão salvos.
-            filename_pattern (str): O padrão para os nomes dos arquivos HTML salvos.
-            all (bool, opcional): Um booleano indicando se todas as páginas disponíveis devem ser ingeridas (padrão é True).
-            pages (int, opcional): O número máximo de páginas a serem ingeridas (padrão é None).
-
-        Returns:
-            None.
-
-        Raises:
-            None.
-
-        """
-        driver = self.webdriver
-        driver.set_window_size(1366, 800)
-        driver.get(self.endpoint)
-        page = 1
-        while all or (max_pages is not None and page < max_pages):
-            try:
-                html_content = driver.page_source
-                file_obj = io.BytesIO(html_content.encode())
-                file_path = f'pipeline/raw/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{page}.html'
-                self.s3.upload_fileobj(file_obj, 'floriparentpricing', file_path)
-                driver.execute_script("window.scrollTo(0,9800)")
-                driver.find_element(By.CSS_SELECTOR, ".pagination__item:nth-child(9) > .js-change-page").click()
-                time.sleep(delay_seconds)
-                page += 1
-            except Exception as e:
-                print(f': An Exception Occurred: {e}')
-                break
-        return True
 
     def extract_listings_from_soup(self, soup) -> bs4.element.ResultSet:
         """
