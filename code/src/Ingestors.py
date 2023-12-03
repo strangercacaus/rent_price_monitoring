@@ -1,11 +1,13 @@
 # Builtins
 from datetime import datetime
 import time
+import io
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+import boto3
 
 # Módulos Personalizados
 from utils import ResultSet

@@ -133,6 +133,7 @@ class Extractor():
             
 
     def process_folder(self, bucket_name: str, folder_path: str, filename_pattern:str, output_format: str = None, max_pages : int = None):
+        folder_name = folder_path.split('/')[4]
         if output_format is None:
             output_format = ['csv','parquet']
         if output_format not in ['csv', 'parquet']:
@@ -149,7 +150,7 @@ class Extractor():
                 pages += 1
             if max_pages and (pages > max_pages):
                 break
-        file_path = f'pipeline/processed/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{datetime.now()}.{output_format}'
+        file_path = f'pipeline/processed/{self.type.lower()}/{self.city}/{filename_pattern}-{folder_name}.{output_format}'
         table = pa.Table.from_pandas(self.result_set)
         output_buffer = io.BytesIO()
         pq.write_table(table, output_buffer)
