@@ -9,9 +9,6 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 import boto3
 
-# Módulos Personalizados
-from utils import ResultSet
-
 class Ingestor():
 
     def __init__(self, cidade:str, webdriver:webdriver = None, s3:boto3.client = None) -> None:
@@ -50,8 +47,10 @@ class Ingestor():
 
         """
         driver = self.webdriver
-        driver.set_window_size(1366, 800)
+        driver.set_window_size(1920, 1080)
         driver.get(self.endpoint)
+        time.sleep(2)
+        driver.find_element(By.CSS_SELECTOR,"#cookie-notifier-cta").click()
         page = 1
         while all or (max_pages is not None and page < max_pages):
             try:
@@ -59,10 +58,11 @@ class Ingestor():
                 file_obj = io.BytesIO(html_content.encode())
                 file_path = f'pipeline/raw/{self.type.lower()}/{self.city}/{datetime.now().date()}/{filename_pattern}-{page}.html'
                 self.s3.upload_fileobj(file_obj, 'floriparentpricing', file_path)
-                driver.execute_script("window.scrollTo(0,9800)")
-                driver.find_element(By.CSS_SELECTOR, ".pagination__item:nth-child(9) > .js-change-page").click()
-                time.sleep(delay_seconds)
-                page += 1
+                driver.execute_script("window.scrollTo(0,9000)")
+                time.sleep(0.5)
+                next_page = driver.find_element(By.XPATH, '//*[@id="js-site-main"]/div[2]/div[1]/section/div[2]/div[2]/div/ul/li[9]/button')
+                page = int(next_page.get_attribute('data-page'))
+                next_page.click()
             except Exception as e:
                 print(f': An Exception Occurred: {e}')
                 break

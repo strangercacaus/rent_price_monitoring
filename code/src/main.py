@@ -1,10 +1,5 @@
-def extract(aws_id=None, aws_key=None,date='2023-11-28'):
+def extract(date='2023-11-28',s3=None):
     from extractors import Extractor
-    import boto3
-
-    s3= boto3.client('s3',
-                    aws_access_key_id = aws_id,
-                    aws_secret_access_key= aws_key)
 
     extractor = Extractor(cidade='florianopolis',
                     s3=s3) # Instanciando API
@@ -17,16 +12,8 @@ def extract(aws_id=None, aws_key=None,date='2023-11-28'):
                         filename_pattern='processed',
                         output_format='parquet')
     
-def ingest(aws_id=None, aws_key=None):
-    from selenium import webdriver
+def ingest(driver=None, s3=None, all=True, max_pages=None):
     from ingestors import Ingestor
-    import boto3
-    
-    s3= boto3.client('s3',
-                    aws_access_key_id = aws_id,
-                    aws_secret_access_key= aws_key)
-
-    driver = webdriver.Chrome() #Instanciando Driver
 
     ingestor = Ingestor(webdriver=driver,
                     cidade='florianopolis',
@@ -36,4 +23,5 @@ def ingest(aws_id=None, aws_key=None):
     ingestor.ingest_pages(
         filename_pattern='page',
         delay_seconds=1.4,
-        all=True)
+        all=all,
+        max_pages=max_pages)
