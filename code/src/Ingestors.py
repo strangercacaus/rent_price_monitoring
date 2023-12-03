@@ -14,17 +14,7 @@ from utils import ResultSet
 
 class Ingestor():
 
-    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None) -> None:
-        """
-        Instancia um objeto da classe VivaRealApi.
-
-        O objeto VivaRealApi reune as funções de scrolling, extração e formatação dos resultados do site Viva Real,
-        sendo o principal componente do web_scraping realizado no projeto
-
-        Args:
-            cidade: Uma string representando a cidade a ser monitorada.
-            delay_seconds: Opcional, um número inteiro representando o atraso em segundos entre as requisições sequenciais.
-        """
+    def __init__(self, cidade:str, webdriver:webdriver = None, s3:boto3.client = None) -> None:
         self.city = cidade
         self.s3 = s3
         self.webdriver = webdriver

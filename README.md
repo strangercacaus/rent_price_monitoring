@@ -32,12 +32,12 @@ adicionados ao arquivo Dataset.csv aqui no github.
 
 ``` mermaid
 classDiagram
-    ListingApi <-- ResultSet 
-    ListingApi --|> VivaRealApi 
-    ListingApi <-- ProxyConfig
+    Extractor <-- ResultSet
+    Ingestor <-- s3
+    Ingestor <-- selenium
 
     class ResultSet{
-        pd.DataFrame(
+        
         data : datetime64[ns],
         fonte : str,
         descricao : str,
@@ -54,49 +54,26 @@ classDiagram
         qtd_quartos : int,
         qtd_vagas : int,
         url : str
-        )
         to_csv()
         to_parquet()
     }
-    class ListingApi{
-        Legend @: abstractclasses
-        @city  :  str
-        delayseconds  :  int
-        _last_http_response  :  int
-        proxy : ProxyConfig
-        result_set  :  ResultSet
-        @_result_count  :  +int
-        @_results_per_page  :  int
-        _first_page()  :  html
-        @_get_endpoint()  :  str
-        _get_new_page_number()  :  int
-        _extract_current_page()  :  html
-        _parse_html_response()  :   bs4.Beautifulsoup
-        _extract_attribute()  :  str
-        @_extract_listings_from_soup()  :  bs4.ResultSet
-        @_format_listing()  :  tuple
-        @_append_formatted_listing()  :  bool
-        _ingest_current_page()  :  None
-        ingest_listings()  :  None
+    class Ingestor{
+        city : str
+        endpoint: str
+        ingest_pages()  :  None
     }
-    class VivaRealApi{
+    class Extractor{
         city  :  str
-        delayseconds  :  int
-        _last_http_response  :  int
+        endpoint: str
         result_set  :  ResultSet
-        _result_count  :  +int
-        _results_per_page  :  int
-        _first_page()  :  html
-        _get_endpoint()  :  str
-        _get_new_page_number()  :  int
-        _extract_current_page()  :  html
-        _parse_html_response()  :   bs4.Beautifulsoup
-        _extract_attribute()  :  str
-        _extract_listings_from_soup()  :  bs4.ResultSet
-        _format_listing()  :  tuple
-        _append_formatted_listing()  :  bool
-        _ingest_current_page()  :  None
-        ingest_listings()  :  None
+        extract_value() : str
+        load_extractor() : lambda
+        format_listing() : dict
+        parse_html()  :   bs4.Beautifulsoup
+        extract_listings_from_soup()  :  bs4.ResultSet
+        append_formatted_listing()  :  bool
+        process_file()  :  None
+        process_folder()
     }
     class GithubApi{
         str token : str
@@ -110,15 +87,6 @@ classDiagram
         _get_encoded_content() : bytes
         _put_content() : None
         _update_file_content() : None
-    }
-
-    class ProxyConfig{
-        str host : str
-        int port : int
-        str username : str
-        str password : str
-        str proxy_list() : str
-        get_proxy_auth() : requests.ProxyAuth
     }
 
 ```

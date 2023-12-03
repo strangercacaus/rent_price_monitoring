@@ -17,7 +17,7 @@ from utils import ResultSet
 
 class Extractor():
 
-    def __init__(self, cidade:str,  webdriver:webdriver = None, s3:boto3.client = None) -> None:
+    def __init__(self, cidade:str, webdriver:webdriver = None, s3:boto3.client = None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -188,7 +188,7 @@ class Extractor():
             'id': lambda x: int(''.join(re.findall(r'\d', x.find('a', {'class': 'property-card__content-link js-card-title'})['href'].split('-')[-1]))),
             'url': lambda x: 'https://vivareal.com.br' + x.find('a', {'class': 'property-card__content-link js-card-title'})['href'],
             'address': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip(),
-            'street': lambda x:  x.find('span', {'class': 'property-card__address'}).text.strip().split('-')[::-1][2].split(',')[0],
+            'street': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().split('-')[::-1][2].split(',')[0],
             'number': lambda x: int(''.join(char for char in x.find('span', {'class': 'property-card__address'}).text.strip() if char.isdigit())) or None,
             'neighborhood': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().replace('-',',').split(',')[-3],
             'rooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]))),
