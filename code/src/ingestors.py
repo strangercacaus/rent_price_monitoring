@@ -50,7 +50,12 @@ class Ingestor():
         driver.set_window_size(1920, 1080)
         driver.get(self.endpoint)
         time.sleep(2)
-        driver.find_element(By.CSS_SELECTOR,"#cookie-notifier-cta").click()
+        if not driver.ChromeOptions().headless
+            try:
+                driver.find_element(By.CSS_SELECTOR,"#cookie-notifier-cta").click()
+            Except NoSuchElementException:
+                pass
+            
         page = 1
         while all or (max_pages is not None and page < max_pages):
             try:
