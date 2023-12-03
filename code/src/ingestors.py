@@ -5,6 +5,7 @@ import io
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
+import contextlib
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 import boto3
@@ -50,12 +51,9 @@ class Ingestor():
         driver.set_window_size(1920, 1080)
         driver.get(self.endpoint)
         time.sleep(2)
-        if not driver.ChromeOptions().headless
-            try:
+        if not driver.ChromeOptions().headless:
+            with contextlib.suppress(NoSuchElementException):
                 driver.find_element(By.CSS_SELECTOR,"#cookie-notifier-cta").click()
-            Except NoSuchElementException:
-                pass
-            
         page = 1
         while all or (max_pages is not None and page < max_pages):
             try:
