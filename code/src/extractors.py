@@ -4,15 +4,15 @@ import time
 import re
 import io
 import logging
+from io import BytesIO
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
-from selenium import webdriver
-from selenium.webdriver.common.by import By
 import pyarrow.parquet as pq
 import pyarrow as pa
 import boto3
-
+import pandas as pd
+import numpy as np
 # Módulos Personalizados
 from utils import ResultSet
 
@@ -28,7 +28,7 @@ logger.addHandler(console_handler)
 
 class Extractor():
 
-    def __init__(self, cidade:str, webdriver:webdriver = None, s3:boto3.client = None) -> None:
+    def __init__(self, cidade:str, s3:boto3.client = None) -> None:
         """
         Instancia um objeto da classe VivaRealApi.
 
@@ -60,6 +60,7 @@ class Extractor():
             fonte = self.type,
             id = self.extract_value(value_id='id', listing=listing),
             descricao = self.extract_value(value_id='title', listing=listing),
+            tipo = self.extract_value(value_id='type',listing=listing),
             endereco = self.extract_value(value_id='address', listing=listing),
             rua = self.extract_value(value_id='street', listing=listing),
             numero = self.extract_value(value_id='number', listing=listing),
@@ -206,9 +207,62 @@ class Extractor():
             'parkingspaces': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-garage'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
             'periodicity': lambda x: x.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('\n','').replace('.','').split('/')[1].split(' ')[0],
             'title': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip(),
+            'type': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip().split('|')[0],
             'area': lambda x: int(''.join(re.findall(r'\d', x.find('span', {'class': 'js-property-card-detail-area'}).text.strip()))),
             'price': lambda x: int(''.join(re.findall(r'\d',x.find('div', {'class': 'property-card__price'}).text))),
             'condoprice': lambda x: int(''.join(re.findall(r'\d', x.find('strong', {'class': 'js-condo-price'}).text.replace('R$ ', '')))),
             'amenities': lambda x: '; '.join(tag.text.strip() for tag in x.find_all('li', {'class': 'amenities__item'}))
         }
         return cases.get(value_id)
+    
+class Formatter():
+    def __init__(self, s3:boto3.client = None) -> None:
+        self.s3 = s3
+        self.type = 'vivareal' # variável fixada momentaneamente, no futuro alterar para ser passada na instanciação da classe
+        self.city = 'florianopolis' # variável fixada momentaneamente, no futuro alterar para ser passada na instanciação da classe
+    
+    def format_df(self, dataframe=pd.DataFrame) -> pd.DataFrame:
+        df = dataframe
+        commercial_values = ['loja', 'ponto', 'box', 'conjunto', 'comercial', 'galpão', 'prédio', 'edifício', 'terreno']
+        try:
+            df['condominio'] = df['condominio'].fillna(0)
+            df['categoria'] = np.where(df['tipo'].isin(commercial_values), 'Comercial', 'Residencial')
+            df['valor_total'] = pd.to_numeric(df.apply(lambda row: row['valor'] + row['condominio'] if not pd.isnull(row['valor']) and not pd.isnull(row['condominio']) else row['valor'], axis=1).fillna(0))
+            df['valor_m2'] = (df['valor'] / df['area']) / 30 if df['periodicidade'].str == 'Mês' else df['valor'] / df['area']
+            df['valor_condo_m2'] = (df['condominio'] / df['area']) / 30 if df['periodicidade'].str == 'Mês' else df['condominio'] / df['area']
+            formatted_df = df[(df['valor_m2'] < 500) &
+                              (df['valor_m2'] >= 1) &
+                              (df['area'] <= 2000) &
+                              (df['valor_condo_m2'] <= 40) &
+                              ((df['periodicidade'] == 'Dia')|(df['periodicidade'] == 'Mês'))]
+        except Exception as e:
+            logger.info(f'Error formatting file: {e}')
+        finally:
+            return formatted_df
+    
+    def parse_parquet_response(self, s3object=None) -> pd.DataFrame:
+        obj = s3object['Body'].read()
+        buffer = BytesIO(obj)
+        parquet_table = pq.read_table(buffer)
+        return parquet_table.to_pandas()
+    
+    def process_date(self, bucket_name: str, datestr: str):
+        file_name = f'pipeline/processed/{self.type.lower()}/{self.city}/extracted/processed-{datestr}.parquet'
+        obj = self.s3.get_object(Bucket=bucket_name, Key=file_name)
+        if not file_name.endswith('.parquet'):
+            raise ValueError("Invalid file format")
+        df = self.parse_parquet_response(s3object=obj)
+        formatted_df = self.format_df(dataframe=df)
+        file_path = f'pipeline/processed/{self.type.lower()}/{self.city}/formatted/formatted-{datestr}.parquet'
+        table = pa.Table.from_pandas(formatted_df)
+        output_buffer = io.BytesIO()
+        pq.write_table(table, output_buffer)
+        output_buffer.seek(0)
+        self.s3.upload_fileobj(output_buffer, bucket_name, file_path)
+        
+    def run(self, datestr=str, reprocess=False, bucket_name=str):
+        # sourcery skip: remove-pass-body
+        if reprocess == True:
+            pass #implementar aqui caso para reprocessar toda a pasta de arquivos.
+        else:
+            self.process_date(datestr=datestr, bucket_name=bucket_name)

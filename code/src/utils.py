@@ -12,6 +12,7 @@ class ResultSet(pd.DataFrame):
                 'fonte': pd.Series(dtype='str'),
                 'id': pd.Series(dtype='int64'),
                 'descricao': pd.Series(dtype='str'),
+                'tipo': pd.Series(dtype='str'),
                 'endereco': pd.Series(dtype='str'),
                 'rua': pd.Series(dtype='str'),
                 'numero': pd.Series(dtype='int'),
