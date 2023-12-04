@@ -2,6 +2,7 @@
 from datetime import datetime
 import time
 import io
+import logging
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
@@ -10,6 +11,16 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 import boto3
 import contextlib
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# Add a console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 class Ingestor():
 
@@ -31,7 +42,7 @@ class Ingestor():
         return f'https://www.vivareal.com.br/aluguel/santa-catarina/{self.city}/'
     
 
-    def ingest_pages(self, filename_pattern:str, all:bool=True, max_pages:int=None, delay_seconds:int=0) -> None:
+    def ingest_pages(self, filename_pattern: str, all: bool = True, max_pages: int = None, delay_seconds: int = 0) -> None:
         """
         Ingere várias páginas de dados da API e salva o conteúdo HTML em arquivos na camada RAW.
 
@@ -48,12 +59,14 @@ class Ingestor():
             None.
 
         """
+        if all and max_pages is not None:
+            raise ValueError("Cannot set 'all' to True while also specifying 'max_pages'")
         driver = self.webdriver
         driver.set_window_size(1920, 1080)
         driver.get(self.endpoint)
         time.sleep(2)
         with contextlib.suppress(Exception):
-            driver.find_element(By.CSS_SELECTOR,"#cookie-notifier-cta").click()
+            driver.find_element(By.CSS_SELECTOR, "#cookie-notifier-cta").click()
         page = 1
         while all or (max_pages is not None and page < max_pages):
             try:
@@ -66,7 +79,9 @@ class Ingestor():
                 next_page = driver.find_element(By.XPATH, '//*[@id="js-site-main"]/div[2]/div[1]/section/div[2]/div[2]/div/ul/li[9]/button')
                 page = int(next_page.get_attribute('data-page'))
                 next_page.click()
+                logger.info(f"Page {page} ingested and saved to {file_path}")
             except Exception as e:
-                print(f': An Exception Occurred: {e}')
+                logger.error(f"An Exception Occurred: {e}")
                 break
         return True
+

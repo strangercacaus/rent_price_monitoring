@@ -3,6 +3,7 @@ from datetime import datetime
 import time
 import re
 import io
+import logging
 
 # Bibliotecas Externas
 import bs4 #BeautifulSoup - Lida com estruturas de dados html
@@ -14,6 +15,16 @@ import boto3
 
 # Módulos Personalizados
 from utils import ResultSet
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# Add a console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 class Extractor():
 
@@ -32,15 +43,16 @@ class Extractor():
         self.result_set = ResultSet()
         self.s3 = s3
         self.type = 'Vivareal'
-        
+        self.additions_count = 0
+    
     def extract_value(self, listing, value_id):
         try:
             func = self.load_extractor(value_id)
             return func(listing)
-        except (AttributeError, TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError, IndexError):
             return None
         except Exception as e:
-            print(f'{__class__}.{__name__} Exception: {e}')
+            logger.info(f'{__name__} Exception: {e}')
     
     def format_listing(self, listing=None) -> dict:
         return dict(
@@ -88,16 +100,10 @@ class Extractor():
             None
         """
         try:
-            if url not in self.result_set['url'].to_list():
-                self.result_set.loc[self.result_set.shape[0]] = listing
-                return True
-            else:
-                print(f'{url} Already exists in the result_set')
+            self.result_set.loc[self.additions_count] = listing
+            self.additions_count += 1
         except Exception as e:
-            print(f'Error appending the following listing:\n{listing}, {e}')
-            return False
-        else:
-            return False
+            logger.info(f'Error appending the following listing:\n{listing}, {e}')
         
     
     def process_file(self, file) -> None:
@@ -120,19 +126,21 @@ class Extractor():
         try:
             soup = self.parse_html(html=file)
             listings = self.extract_listings_from_soup(soup=soup)
-            added_listings = 0
+            added_listings = set()
             for i in listings:
-                formatted = self.format_listing(listing = i)
-                success = self.append_formatted_listing(listing=formatted)
-                if success == True:
-                    added_listings += 1
+                listing_id = self.extract_value(value_id='id', listing=i)
+                if listing_id not in added_listings:
+                    formatted = self.format_listing(listing = i)
+                    self.append_formatted_listing(listing=formatted)
+                    added_listings.add(listing_id)
         except Exception as e:
-            print(f'Something went wrong while formating the listings of the current file: {e}')
+            logger.info(f'Something went wrong while processing the file: {e}')
         else:
-            print(f'{added_listings} new listings added to result set')
+            logger.info(f'{len(added_listings)} new listings added to result set')
             
 
     def process_folder(self, bucket_name: str, folder_path: str, filename_pattern:str, output_format: str = None, max_pages : int = None):
+        self.additions_count = 0
         folder_name = folder_path.split('/')[4]
         if output_format is None:
             output_format = ['csv','parquet']
@@ -140,7 +148,9 @@ class Extractor():
             raise ValueError("Output Format must be one of 'csv', 'parquet'")
             
         s3objects = self.s3.list_objects_v2(Bucket=bucket_name, Prefix=folder_path)
+        
         pages = 1
+        
         for obj in s3objects.get('Contents', []):
             file_name = obj['Key']
             if file_name.endswith('.html'):
