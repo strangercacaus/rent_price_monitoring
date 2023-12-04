@@ -1,7 +1,11 @@
 import pandas as pd
 import requests
 import base64
+from io import BytesIO
     
+import boto3
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 
 class ResultSet(pd.DataFrame):
@@ -184,3 +188,36 @@ class GithubApi():
         headers = {'Authorization': f'token {self.token}'}
         data = {"message": commit_message,"content": encoded_content,"sha": current_sha}
         self._put_content(headers=headers, data=data, url=file_url)
+        
+class Aggregator():
+    def __init__(self, s3):
+        self.s3 = s3
+        self.city = 'florianopolis'
+        self.type = 'vivareal'
+
+    def combine_parquet_files(self, bucket_name, prefix):
+        s3 = self.s3
+        response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+
+        tables = []
+        for obj in response['Contents']:
+            if obj['Key'].endswith('.parquet'):
+                file_obj = s3.get_object(Bucket=bucket_name, Key=obj['Key'])
+                data = file_obj['Body'].read()
+                buffer = BytesIO(data)
+                table = pq.read_table(buffer)
+                tables.append(table)
+        return pa.concat_tables(tables)
+
+    def upload_combined_file(self, bucket_name, combined_table, s3_key):
+        s3 = self.s3
+        output_buffer = BytesIO()
+        pq.write_table(combined_table, output_buffer)
+        output_buffer.seek(0)
+        self.s3.upload_fileobj(output_buffer, bucket_name, s3_key)
+
+    def run(self, bucket_name):
+        output_filename = f'pipeline/processed/{self.type.lower()}/{self.city.lower()}/curated/listings_history.parquet'
+        prefix = f'pipeline/processed/{self.type.lower()}/{self.city}/formatted/'
+        combined_table = self.combine_parquet_files(bucket_name, prefix)
+        self.upload_combined_file(bucket_name, combined_table, s3_key=output_filename)
