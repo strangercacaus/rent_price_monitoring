@@ -1,11 +1,23 @@
 import pandas as pd
 import requests
 import base64
+import logging
 from io import BytesIO
     
 import boto3
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# Add a console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 
 class ResultSet(pd.DataFrame):
@@ -34,7 +46,7 @@ class ResultSet(pd.DataFrame):
                     })
 
 class GithubApi():
-    def __init__(self, token:str, owner:str, repo:str) -> None:
+    def __init__(self, token:str, owner:str, repo:str, branch:str) -> None:
         """
         Inicia a classe GithubApi com o token de autenticação, usuário e repositório.
         
@@ -49,6 +61,7 @@ class GithubApi():
         self.token = token
         self.owner = owner
         self.repo = repo
+        self.branch = branch
         self.base_url = f'https://api.github.com/repos/{owner}/{repo}'
         
     def get_url(self, file_path:str) -> str:
@@ -154,16 +167,17 @@ class GithubApi():
             response.raise_for_status()
             return response
         except requests.HTTPError as http_err:
-            print(f'HTTP error occurred: {http_err}')
+            logger.info(f'HTTP error occurred: {http_err}')
         except Exception as err:
-            print(f'Other error occurred: {err}')
+            logger.info(f'Other error occurred: {err}')
         finally:
             if response.status_code == 200:
-                print("File updated successfully.")
+                logger.info("File updated successfully.")
             else:
-                print(f"Failed to update file. Status code: {response.status_code}")
+                logger.info(response.content)
+                logger.info(f"Failed to update file. Status code: {response.status_code}")
     
-    def update_file_content(self, file_path, new_content, method='append') -> None:
+    def update_file_content(self, file_path:str, new_content:pd.DataFrame, method='overwrite') -> None:
         """
         Realiza o update do conteúdo de um arquivo a partir de um path e um novo conteúdo.
         
@@ -175,6 +189,8 @@ class GithubApi():
         - method: 'append' Adiciona o novo conteúdo ao existente | 'overwrite' sobrescreve o conteúdo com o novo.
         """
         file_url = self.get_url(file_path=file_path)
+        if self.branch:
+            file_url = f'{file_url}?ref={self.branch}'
         download_url, current_sha = self.get_file_info(file_url)
         current_content = self._download_current_content(download_url)
         if method == 'append':
@@ -186,7 +202,10 @@ class GithubApi():
         encoded_content = self._get_encoded_content(appended_content)
         commit_message = "Automatically updated via Kaggle script"
         headers = {'Authorization': f'token {self.token}'}
-        data = {"message": commit_message,"content": encoded_content,"sha": current_sha}
+        data = {"message": commit_message,
+                "content": encoded_content,
+                "sha": current_sha,
+                "branch":self.branch}
         self._put_content(headers=headers, data=data, url=file_url)
         
 class Aggregator():
@@ -216,8 +235,15 @@ class Aggregator():
         output_buffer.seek(0)
         self.s3.upload_fileobj(output_buffer, bucket_name, s3_key)
 
-    def run(self, bucket_name):
+    def run(self, bucket_name, export_method:str='s3'):
         output_filename = f'pipeline/processed/{self.type.lower()}/{self.city.lower()}/curated/listings_history.parquet'
         prefix = f'pipeline/processed/{self.type.lower()}/{self.city}/formatted/'
         combined_table = self.combine_parquet_files(bucket_name, prefix)
-        self.upload_combined_file(bucket_name, combined_table, s3_key=output_filename)
+        if export_method == 's3':
+            self.upload_combined_file(bucket_name, combined_table, s3_key=output_filename)
+            return True
+        
+        elif export_method == 'df':
+            return combined_table.to_pandas()
+        else:
+            raise TypeError('Invalid export method, must be one of "s3", "df"')
