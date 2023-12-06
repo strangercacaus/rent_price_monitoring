@@ -162,7 +162,7 @@ class Extractor():
             if max_pages and (pages > max_pages):
                 break
         file_path = f'pipeline/processed/{self.type.lower()}/{self.city}/extracted/{filename_pattern}-{folder_name}.{output_format}'
-        table = pa.Table.from_pandas(self.result_set)
+        table = pa.Table.from_pandas(self.result_set.drop_duplicates())
         output_buffer = io.BytesIO()
         pq.write_table(table, output_buffer)
         output_buffer.seek(0)
@@ -196,21 +196,53 @@ class Extractor():
 
     def load_extractor(self, value_id: str) -> callable:
         cases = {
+            
+            # ID do anúncio
             'id': lambda x: int(''.join(re.findall(r'\d', x.find('a', {'class': 'property-card__content-link js-card-title'})['href'].split('-')[-1]))),
+            
+            # Url do anúncio
             'url': lambda x: 'https://vivareal.com.br' + x.find('a', {'class': 'property-card__content-link js-card-title'})['href'],
+            
+            # String completa do endereço no anúncio
             'address': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip(),
+            
+            # Rua do endereço, se existente
             'street': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().split('-')[::-1][2].split(',')[0],
+            
+            # Número do endereço, se existente
             'number': lambda x: int(''.join(char for char in x.find('span', {'class': 'property-card__address'}).text.strip() if char.isdigit())) or None,
+            
+            # Bairro, obtido do endereço
             'neighborhood': lambda x: x.find('span', {'class': 'property-card__address'}).text.strip().replace('-',',').split(',')[-3],
+            
+            # Quartos
             'rooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-room'}).text.strip()[0]))),
+            
+            # Banheiros
             'bathrooms': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-bathroom'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
+            
+            # Vagas de Garagem
             'parkingspaces': lambda x: int(''.join(re.findall(r'\d', x.find('li', {'class': 'property-card__detail-garage'}).find('span',{'class':'property-card__detail-value'}).text.strip()[0]))),
+            
+            # Periodicidade do anúncio
             'periodicity': lambda x: x.find('div', {'class': 'property-card__price'}).text.replace('R$','').replace('\n','').replace('.','').split('/')[1].split(' ')[0],
+            
+            # Título do anúncio
             'title': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip(),
-            'type': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip().split('|')[0],
+            
+            # Tipo de imóvel, encontrado na primeira palavra do anúncio
+            'type': lambda x: x.find('span', {'class': 'js-card-title'}).text.strip().split(' ')[0],
+            
+            # Area do imóvel
             'area': lambda x: int(''.join(re.findall(r'\d', x.find('span', {'class': 'js-property-card-detail-area'}).text.strip()))),
+            
+            # Valor do aluguel
             'price': lambda x: int(''.join(re.findall(r'\d',x.find('div', {'class': 'property-card__price'}).text))),
+            
+            # Valor do condomínio
             'condoprice': lambda x: int(''.join(re.findall(r'\d', x.find('strong', {'class': 'js-condo-price'}).text.replace('R$ ', '')))),
+            
+            # o campo 'amenities' percorre todas as comodidades do anúncio e as insere em uma lista no formato de string.
             'amenities': lambda x: '; '.join(tag.text.strip() for tag in x.find_all('li', {'class': 'amenities__item'}))
         }
         return cases.get(value_id)
@@ -223,13 +255,25 @@ class Formatter():
     
     def format_df(self, dataframe=pd.DataFrame) -> pd.DataFrame:
         df = dataframe
+        
+        # A lista de tipos de imóveis abaixo define os tipos tidos como comerciais, para segmentar com maior facilidade o dataset.
         commercial_values = ['loja', 'ponto', 'box', 'conjunto', 'comercial', 'galpão', 'prédio', 'edifício', 'terreno']
         try:
-            df['condominio'] = df['condominio'].fillna(0)
             df['categoria'] = np.where(df['tipo'].isin(commercial_values), 'Comercial', 'Residencial')
+            
+            df['condominio'] = df['condominio'].fillna(0)
+
+            # A coluna de valor total soma o valor do condomínio com o valor do aluguel nos casos em que o aluguel é mensal.
             df['valor_total'] = pd.to_numeric(df.apply(lambda row: row['valor'] + row['condominio'] if not pd.isnull(row['valor']) and not pd.isnull(row['condominio']) else row['valor'], axis=1).fillna(0))
+            
+            # Estes valores calculados servem tanto para a análise dos dados como para a identificação de outliers
             df['valor_m2'] = (df['valor'] / df['area']) / 30 if df['periodicidade'].str == 'Mês' else df['valor'] / df['area']
             df['valor_condo_m2'] = (df['condominio'] / df['area']) / 30 if df['periodicidade'].str == 'Mês' else df['condominio'] / df['area']
+            
+            # Se o tipo da coluna area não for reforçado como float pode acabar sendo definido automaticamente como int em edge cases em que todos os valores estão presentes.
+            df['area'] = df['area'].astype(float) 
+            
+            # As condições abaixo tratam outliers, como erros de digitação em que os valores são exorbitantes e é impossível determinar um tratamento único adequado para todos os casos.
             formatted_df = df[(df['valor_m2'] < 500) &
                               (df['valor_m2'] >= 1) &
                               (df['area'] <= 2000) &
@@ -248,6 +292,7 @@ class Formatter():
     
     def process_date(self, bucket_name: str, datestr: str):
         file_name = f'pipeline/processed/{self.type.lower()}/{self.city}/extracted/processed-{datestr}.parquet'
+        logger.info(f'getting object from s3 on {file_name}')
         obj = self.s3.get_object(Bucket=bucket_name, Key=file_name)
         if not file_name.endswith('.parquet'):
             raise ValueError("Invalid file format")

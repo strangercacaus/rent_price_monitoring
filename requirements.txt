@@ -3,6 +3,7 @@ pandas
 bs4
 boto3
 selenium
+html5lib
 pyarrow
 matplotlib
 python-dotenv
