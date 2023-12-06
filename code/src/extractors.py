@@ -259,7 +259,7 @@ class Formatter():
         # A lista de tipos de imóveis abaixo define os tipos tidos como comerciais, para segmentar com maior facilidade o dataset.
         commercial_values = ['loja', 'ponto', 'box', 'conjunto', 'comercial', 'galpão', 'prédio', 'edifício', 'terreno']
         try:
-            df['categoria'] = np.where(df['tipo'].isin(commercial_values), 'Comercial', 'Residencial')
+            df['categoria'] = np.where(df['tipo'].str.lower().isin(commercial_values), 'Comercial', 'Residencial')
             
             df['condominio'] = df['condominio'].fillna(0)
 
